@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FitConnect 運動平台</title>
+    <link rel="icon" href="public/image/logo/logo.png">
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <link rel="stylesheet" href="public/css/style.css">
+
+
+</head>
+
+<body>
+
+    <!-- 背景律動元素  -->
+    <div class="rhythm-bg">
+        <canvas id="particle-canvas"></canvas>
+        <div class="honeycomb-cluster">
+            <div class="hex"></div>
+            <div class="hex"></div>
+            <div class="hex"></div>
+            <div class="hex"></div>
+            <div class="hex"></div>
+            <div class="hex"></div>
+            <div class="hex"></div>
+            <div class="hex"></div>
+            <div class="hex"></div>
+        </div>
+    </div>
+
+    <!-- 登入/註冊 -->
+    <div id="auth-view" class="auth-container">
+        <div class="auth-card">
+            <h1
+                style="text-align: center; color: var(--primary); font-style: italic; font-size: 2.5rem; margin-bottom: 2rem; display: flex; align-items: center; justify-content: center; gap: 15px;">
+                <img src="public/image/logo/logoremovebg.png" alt="Logo" style="height: 60px; width: auto;">
+                FitConnect
+            </h1>
+            <div class="tab-buttons">
+                <button class="btn-primary tab-btn active" id="tab-login" onclick="switchTab('login')">登入</button>
+                <button class="btn-primary tab-btn" id="tab-register" onclick="switchTab('register')">註冊</button>
+            </div>
+
+            <div style="position: relative; min-height: 240px;">
+                <form id="login-form">
+                    <label class="form-label">Email</label>
+                    <input type="email" id="login-email" class="form-control" name="email" required>
+                    <label class="form-label">密碼</label>
+                    <input type="password" id="login-password" class="form-control" name="password" required>
+                    <button type="submit" class="btn-primary" style="width: 100%; margin-top: 0.5rem;">登入</button>
+                    <!-- demo
+                    <p style="text-align: center; margin-top: 1rem; cursor: pointer; color: #999; font-size: 0.9rem;"
+                        onclick="demoLogin()">
+                        Demo 模式登入
+                    </p>
+                -->
+                </form>
+
+                <form id="register-form" class="hidden">
+                    <label class="form-label">暱稱</label>
+                    <input type="text" id="register-display-name" class="form-control" name="display_name" required>
+                    <label class="form-label">Email</label>
+                    <input type="email" id="register-email" class="form-control" name="email" required>
+                    <label class="form-label">密碼</label>
+                    <input type="password" id="register-password" class="form-control" name="password" required>
+                    <button type="submit" class="btn-primary" style="width: 100%; margin-top: 0.5rem;">註冊</button>
+                </form>
+            </div>
+            <div id="auth-msg" style="text-align: center; margin-top: 0.5rem; color: red;"></div>
+        </div>
+    </div>
+
+    <!-- 主控台 -->
+    <div id="dashboard-view" class="hidden">
+
+        <nav class="navbar-wrapper">
+            <div class="navbar-shape"></div>
+            <div class="navbar-content">
+                <a href="#" class="nav-logo-area">
+                    <img src="public/image/logo/logoremovebg.png" alt="Logo" class="nav-logo-img">
+                    <span class="nav-logo-text">FitConnect</span>
+                </a>
+                <button class="nav-toggle" aria-label="Toggle Navigation">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+                <div class="nav-links">
+                    <a href="#section-hero" class="active">紀錄</a>
+                    <a href="#section-charts">分析</a>
+                    <a href="#section-leaderboard">排行榜</a>
+                    <a href="#line-bind-section">綁定</a>
+                    <a href="#" id="nav-coach-toggle" onclick="toggleAICoach(event)">AI教練: ON</a>
+                    <a href="#" onclick="logout()">登出</a>
+                    <a href="#" id="pwa-install-btn" style="display: none;" onclick="triggerInstall()">安裝 FitConnect</a>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Hero: 左大頭貼 右輸入 -->
+        <section id="section-hero" class="container hero-container">
+            <!-- 左 -->
+            <div class="hero-left">
+                <div class="avatar-wrapper">
+                    <div class="avatar-arrow left" onclick="changeAvatar(-1)">❮</div>
+                    <img src="public/image/1.png" id="current-avatar" class="avatar-img" alt="Avatar">
+                    <div class="avatar-arrow right" onclick="changeAvatar(1)">❯</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-top: 1rem;">
+                    <h2 id="user-display-name" style="margin: 0; font-size: 4rem;">User</h2>
+                    <span class="edit-profile-btn" onclick="showEditProfileModal()">✎</span>
+                </div>
+                <div style="font-size: 1.2rem; color: rgba(255,255,255,0.8); margin-bottom: 2rem;">
+                    <span id="user-height">未設定</span> / <span id="user-weight">未設定</span>
+                </div>
+            </div>
+            <!-- 右 -->
+            <div class="hero-right">
+                <h2 style="margin-bottom: 2rem; color: var(--secondary);">今天動了多少？</h2>
+                <form id="add-workout-form" autocomplete="off">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <div>
+                            <label class="form-label">日期&時間</label>
+                            <div style="display: flex; gap: 10px;">
+                                <input type="date" class="form-control" name="date_part" id="input-date-part" required
+                                    style="flex: 2;">
+                                <input type="time" class="form-control" name="time_part" id="input-time-part" required
+                                    style="flex: 1;">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="form-label">種類</label>
+                            <select class="form-control" name="type" id="input-sport" onchange="calculateCalories()">
+                                <option value="" disabled selected>請選擇</option>
+                                <option value="跑步">跑步</option>
+                                <option value="重訓">重訓</option>
+                                <option value="腳踏車">腳踏車</option>
+                                <option value="游泳">游泳</option>
+                                <option value="瑜珈">瑜珈</option>
+                                <option value="其他">其他</option>
+                            </select>
+                        </div>
+                        <div style="grid-column: span 2;">
+                            <label class="form-label">時間 (分鐘)</label>
+                            <input type="number" class="form-control" name="minutes" id="input-minutes" min="1" required
+                                oninput="calculateCalories()" placeholder="輸入分鐘數">
+                        </div>
+                    </div>
+                    <div id="calorie-display-area" class="hidden"
+                        style="margin-top: 20px; text-align: right; font-size: 1.5rem; font-weight: bold; color: var(--secondary);">
+                        消耗約 <span id="calc-val" style="font-size: 2rem; color: var(--orange-red);">0</span> kcal
+                    </div>
+                    <input type="hidden" name="calories" id="input-calories">
+                    <button type="submit" class="btn-primary" style="width: 100%; margin-top: 20px;">新增紀錄</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Wave Divider -->
+        <div class="wave-divider">
+            <svg class="waves" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+                viewBox="0 24 150 28" preserveAspectRatio="none" shape-rendering="auto">
+                <defs>
+                    <path id="gentle-wave"
+                        d="M-160 44c30 0 58-18 88-18s 58 18 88 18 58-18 88-18 58 18 88 18 v44h-352z" />
+                </defs>
+                <g class="parallax">
+                    <use xlink:href="#gentle-wave" x="48" y="0" />
+                    <use xlink:href="#gentle-wave" x="48" y="3" />
+                    <use xlink:href="#gentle-wave" x="48" y="5" />
+                    <use xlink:href="#gentle-wave" x="48" y="7" />
+                </g>
+            </svg>
+        </div>
+
+        <!-- 圖表分析 -->
+        <section id="section-charts">
+            <div class="container">
+                <h2 style="text-align: center; margin-bottom: 2rem; font-size: 2.5rem; margin-top: 2rem;">數據分析</h2>
+
+                <!-- 全域時間切換 -->
+                <div class="global-time-switch">
+                    <button class="g-time-btn active" onclick="setGlobalRange('1d')">1天</button>
+                    <button class="g-time-btn" onclick="setGlobalRange('1wk')">1周</button>
+                    <button class="g-time-btn" onclick="setGlobalRange('1m')">1月</button>
+                    <button class="g-time-btn" onclick="setGlobalRange('3m')">3月</button>
+                </div>
+            </div>
+
+            <!-- Scroll Pinned Wrapper -->
+            <div class="scroll-pinned-wrapper">
+                <div class="chart-sticky-container">
+                    <div class="charts-grid-advanced">
+                        <!-- 每日總時間長條圖 -->
+                        <div class="chart-box">
+                            <div class="chart-title">運動時間</div>
+                            <div style="flex: 1;"><canvas id="chart-bar-time"></canvas></div>
+                        </div>
+                        <!-- 運動種類圓餅圖 -->
+                        <div class="chart-box">
+                            <div class="chart-title">運動種類</div>
+                            <div
+                                style="flex: 1; display: flex; align-items: center; justify-content: center; position: relative;">
+                                <canvas id="chart-pie-types"></canvas>
+                                <!-- 中間 ICON -->
+                                <div class="pie-center-content">
+                                    <span class="pie-center-icon" id="pie-center-icon">🏆</span>
+                                    <div class="pie-center-text" id="pie-center-text">總覽</div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- 每日熱量 (跨欄) -->
+                        <div class="chart-box" style="grid-column: span 2;">
+                            <div class="chart-title">熱量消耗曲線</div>
+                            <div style="flex: 1;"><canvas id="chart-line-calories"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Wave Divider (Yellow) -->
+        <div class="wave-divider yellow-waves">
+            <svg class="waves" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+                viewBox="0 24 150 28" preserveAspectRatio="none" shape-rendering="auto">
+                <defs>
+                    <path id="gentle-wave2"
+                        d="M-160 44c30 0 58-18 88-18s 58 18 88 18 58-18 88-18 58 18 88 18 v44h-352z" />
+                </defs>
+                <g class="parallax">
+                    <use xlink:href="#gentle-wave2" x="48" y="0" />
+                    <use xlink:href="#gentle-wave2" x="48" y="3" />
+                    <use xlink:href="#gentle-wave2" x="48" y="5" />
+                    <use xlink:href="#gentle-wave2" x="48" y="7" />
+                </g>
+            </svg>
+        </div>
+
+        <!-- 排行榜 -->
+        <section id="section-leaderboard" class="container">
+            <h2 style="text-align: center; margin-bottom: 2rem; font-size: 2.5rem;">排行榜</h2>
+            <div class="leaderboard-card">
+                <table class="leaderboard-table" id="leaderboard-table">
+                    <thead>
+                        <tr>
+                            <th>排名</th>
+                            <th>用戶</th>
+                            <th>總消耗熱量 (kcal)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="leaderboard-body">
+                        <!-- JS Render -->
+                    </tbody>
+                </table>
+            </div>
+
+        </section>
+
+        <!-- Container for Wave + LINE Section to ensure seamless background -->
+        <div
+            style="width: 100%; overflow: hidden; line-height: 0; margin-bottom: -1px; margin-top: -100px; position: relative; z-index: 20; pointer-events: none;">
+            <svg class="waves" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+                viewBox="0 24 150 28" preserveAspectRatio="none" shape-rendering="auto"
+                style="width: 100%; height: 100px;">
+                <defs>
+                    <path id="gentle-wave3"
+                        d="M-160 44c30 0 58-18 88-18s 58 18 88 18 58-18 88-18 58 18 88 18 v44h-352z" />
+                </defs>
+                <g class="parallax">
+                    <use xlink:href="#gentle-wave3" x="48" y="0" style="fill:rgba(255,255,255,0.7)" />
+                    <use xlink:href="#gentle-wave3" x="48" y="3" style="fill:rgba(254, 184, 93, 0.5)" />
+                    <use xlink:href="#gentle-wave3" x="48" y="5" style="fill:rgba(247, 201, 95, 0.3)" />
+                    <use xlink:href="#gentle-wave3" x="48" y="7" style="fill:rgba(255,255,255,0.95)" />
+                </g>
+            </svg>
+        </div>
+
+        <!-- LINE 綁定區塊 Wrapper (Full Width Background) -->
+        <div style="background: rgba(255,255,255,0.95); padding-bottom: 3rem; margin-top: -1px;">
+            <div id="line-bind-section"
+                style="padding: 2rem; max-width: 1200px; margin-left: auto; margin-right: auto; position: relative; z-index: 10;">
+                <h3
+                    style="margin: 0 0 1.5rem 0; color: #333; font-size: 1.5rem; display: flex; align-items: center; gap: 10px; font-weight: bold; justify-content: center;">
+                    <span style="font-size: 2rem;">📱</span> LINE 綁定
+                </h3>
+                <div id="line-bind-status">
+                    <!-- 未綁定狀態 -->
+                    <div id="not-bound">
+                        <p style="color: #555; margin-bottom: 1.5rem; font-size: 1rem; text-align: center;">綁定 LINE 後
+                            可在LINE上輸入運動紀錄</p>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: start;">
+                            <!-- 左側：按鈕和說明 -->
+                            <div>
+                                <button onclick="generateBindCode()" class="line-primary"
+                                    style="width: 100%; margin-bottom: 1rem;">
+                                    產生綁定碼
+                                </button>
+                                <div class="usage-box"
+                                    style="background: rgba(197, 248, 176, 0.1); padding: 1.5rem; border-radius: 12px; border-left: 4px solid #00B900;">
+                                    <p style="color: #333; font-size: 0.95rem; margin: 0; line-height: 1.6;">
+                                        <strong style="color: #00B900;">📌 使用方式：</strong><br>
+                                        1️⃣ 點擊「產生綁定碼」按鈕<br>
+                                        2️⃣ 掃描 QR Code 或加入 LINE ID: <strong
+                                            style="color: #00B900;">@063jezzz</strong><br>
+                                        3️⃣ 在 LINE Bot 中輸入綁定碼
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- 右側：QR Code 和綁定碼 -->
+                            <div id="bind-code-display" style="display: none; text-align: center;">
+                                <div
+                                    style="background: #fff; padding: 2rem; border-radius: 10px; margin-bottom: 1rem; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                                    <div id="qrcode" style="display: inline-block;"></div>
+                                </div>
+                                <div
+                                    style="background: #00B900; padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem; border: 2px solid rgba(255,255,255,0.3);">
+                                    <p style="color: #fff; margin: 0 0 0.5rem 0; font-size: 1rem; font-weight: bold;">
+                                        綁定碼（10分鐘內有效）</p>
+                                    <p id="bind-code-text"
+                                        style="color: #fff; font-size: 2.5rem; font-weight: bold; margin: 0; letter-spacing: 5px; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+                                        ------</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 已綁定狀態 -->
+                    <div id="already-bound" style="display: none; text-align: center;">
+                        <p
+                            style="color: #22c55e; margin-bottom: 1rem; display: flex; align-items: center; gap: 8px; font-size: 1.1rem; font-weight: bold; justify-content: center;">
+                            <span style="font-size: 1.3rem;">✓</span> 已綁定 LINE
+                        </p>
+                        <button onclick="unbindLine()" class="btn-primary" style="width: 50%; background: #ef4444;">
+                            解除綁定
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Coach 半身像 -->
+        <div id="ai-coach-container" class="hidden">
+            <div class="coach-img-wrapper" onclick="toggleChat()"
+                onmouseover="document.querySelector('.coach-full-img').src='public/image/tinin2.png'; document.getElementById('coach-bubble').style.opacity='1';"
+                onmouseout="document.querySelector('.coach-full-img').src='public/image/tinin.png'; document.getElementById('coach-bubble').style.opacity='0';">
+                <div class="coach-bubble" id="coach-bubble">今天想練什麼呢？</div>
+                <img src="public/image/tinin.png" class="coach-full-img" alt="AI Coach">
+            </div>
+        </div>
+
+        <!-- Chat Window (Absolute) -->
+        <div id="chat-window">
+            <div class="chat-header">
+                <strong>AI 教練</strong>
+            </div>
+            <div id="chat-messages">
+                <div class="chat-msg ai">嗨！我是你的專屬教練，可以分析您最近的運動量與給您建議</div>
+            </div>
+            <div class="chat-input-area">
+                <input type="text" id="chat-input" class="form-control" placeholder="問我...">
+                <button onclick="sendChatMessage()">➤</button>
+            </div>
+        </div>
+
+
+        <script src="public/js/main.js"></script>
+
+        <script src="public/js/bg-effects.js"></script>
+        <script src="public/js/ai_chat.js"></script>
+    </div>
+</body>
+
+</html>

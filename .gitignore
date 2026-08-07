@@ -1,0 +1,48 @@
+# =========================
+# Secrets / Environment
+# =========================
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# =========================
+# Credentials / Private keys
+# =========================
+*.pem
+*.key
+credentials*.json
+service-account*.json
+
+# =========================
+# Database backups
+# =========================
+*.dump
+*.backup
+*.sql.gz
+backups/
+**/backups/
+
+# =========================
+# Runtime / Logs
+# =========================
+*.log
+logs/
+**/logs/
+tmp/
+cache/
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
