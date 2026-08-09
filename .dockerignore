@@ -1,0 +1,28 @@
+.git
+.github
+.gitignore
+
+.env
+.env.*
+**/.env
+**/.env.*
+
+.vscode
+.idea
+
+logs
+tmp
+cache
+backups
+
+*.log
+*.dump
+*.backup
+*.sql.gz
+
+# 開發測試工具，不進正式 Container
+db_test.php
+test_email.php
+
+# 文件，不需要放進 Web Container
+illustrate/

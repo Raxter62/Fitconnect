@@ -1,8 +1,16 @@
 FROM php:8.2-apache
 
-# 安裝 PDO PostgreSQL（Neon/Railway 使用）
-RUN apt-get update && apt-get install -y libpq-dev \
-    && docker-php-ext-install pdo pdo_pgsql \
+# PostgreSQL + HTTP API + UTF-8 字串處理需要的系統函式庫
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libpq-dev \
+        libcurl4-openssl-dev \
+        libonig-dev \
+    && docker-php-ext-install \
+        pdo_pgsql \
+        curl \
+        mbstring \
+    && a2enmod rewrite \
     && rm -rf /var/lib/apt/lists/*
 
 # 🔧 建置階段：清掉所有 MPM，只留下 mpm_prefork + rewrite
@@ -22,7 +30,7 @@ RUN rm -f /etc/apache2/mods-enabled/mpm_*.load /etc/apache2/mods-enabled/mpm_*.c
 WORKDIR /var/www/html
 COPY . /var/www/html
 
-# 由 Railway 管理
+
 EXPOSE 80
 
 # 🔧 啟動階段：再保險一次，把 event/worker 關掉後 mods-enabled 移除 才啟動 Apache

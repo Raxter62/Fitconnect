@@ -139,34 +139,6 @@ async function checkLogin() {
     }
 }
 
-async function loadLeaderboard() {
-    const tbody = document.querySelector('#leaderboard-table tbody');
-    if (!tbody) return;
-
-    try {
-        const range = globalTimeRange || '1m';
-        const res = await fetch(`${API_URL}?action=get_leaderboard&range=${range}&t=${Date.now()}`, { credentials: 'same-origin' });
-        const json = await res.json();
-
-        if (json.success) {
-            tbody.innerHTML = json.data.map((user, index) => `
-                <tr>
-                    <td>${index + 1}</td>
-                    <td>
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <span>${user.display_name}</span>
-                            ${index === 0 ? '👑' : ''}
-                        </div>
-                    </td>
-                    <td>${user.total}</td>
-                </tr>
-            `).join('');
-        }
-    } catch (e) {
-        console.error('Leaderboard error:', e);
-    }
-}
-
 function showLogin() {
     const authView = document.getElementById('auth-view');
     const dashboardView = document.getElementById('dashboard-view');
@@ -495,7 +467,6 @@ async function handleAddWorkout(e) {
     const timePart = form.querySelector('#input-time-part').value;
     const type = form.querySelector('#input-sport').value;
     const minutes = parseInt(form.querySelector('#input-minutes').value) || 0;
-    const calories = parseInt(form.querySelector('#input-calories').value) || 0;
 
     // 嚴格檢查身高體重 (轉為浮點數判斷是否大於 0)
     const userHeight = parseFloat(currentUser?.height || 0);
@@ -518,8 +489,7 @@ async function handleAddWorkout(e) {
         const json = await fetchPost('add_workout', {
             date: datetime,
             type,
-            minutes,
-            calories
+            minutes
         });
 
         if (json.success) {
@@ -554,10 +524,12 @@ function setGlobalRange(range) {
 
     // Update active button state
     document.querySelectorAll('.g-time-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.textContent.includes(range === '1wk' ? '1周' : range === '1m' ? '1月' : range === '3m' ? '3月' : '1天'));
+        btn.classList.toggle('active', btn.dataset.range === range);
     });
 
-    fetchStats(range);
+    if (range !== 'total') {
+        fetchStats(range);
+    }
     loadLeaderboard();
 }
 window.setGlobalRange = setGlobalRange;
@@ -826,9 +798,10 @@ async function loadLeaderboard() {
     if (!tbody) return;
 
     try {
+        const range = globalTimeRange || '1m';
         const json = isDemoMode
-            ? { success: true, data: [{ rank: 1, display_name: 'Demo Hero', total: 180 }] }
-            : await (await fetch(`${API_URL}?action=get_leaderboard`, { credentials: 'same-origin' })).json();
+            ? { success: true, range, data: [{ rank: 1, display_name: 'Demo Hero', total: range === 'total' ? 1800 : 180 }] }
+            : await (await fetch(`${API_URL}?action=get_leaderboard&range=${encodeURIComponent(range)}&t=${Date.now()}`, { credentials: 'same-origin' })).json();
 
         if (!json.success || !json.data || !json.data.length) {
             tbody.innerHTML = '<tr><td colspan="3">暫無資料</td></tr>';
@@ -1223,10 +1196,6 @@ function generateAvatarGrid() {
     // 頭像選擇
 }
 
-function setupCoachInteraction() {
-    // AI 教練
-}
-
 // ========== 頭像功能 ==========
 
 // 全域變數
@@ -1477,7 +1446,9 @@ function startAutoRefresh() {
         // 2. Refresh Stats (Charts)
         // Use globalTimeRange
         try {
-            fetchStats(globalTimeRange || '1d');
+            if (globalTimeRange !== 'total') {
+                fetchStats(globalTimeRange || '1d');
+            }
         } catch (e) { console.error('Auto-refresh Stats Error', e); }
 
         // 3. Refresh Leaderboard

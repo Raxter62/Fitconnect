@@ -110,13 +110,19 @@ try {
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             display_name TEXT,
-            line_user_id TEXT,
+            avatar_id INTEGER NOT NULL DEFAULT 1,
+            line_user_id TEXT UNIQUE,
             line_bind_code VARCHAR(10),
             line_bind_code_expires_at TIMESTAMPTZ,
             height NUMERIC(5,1),
             weight NUMERIC(5,1),
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
+    ");
+
+    $pdo->exec("
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS avatar_id INTEGER NOT NULL DEFAULT 1;
     ");
 
     $pdo->exec("
@@ -160,6 +166,9 @@ try {
 
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_workouts_user_date ON workouts(user_id, date);");
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_leaderboard_date ON leaderboard_snapshots(date);");
+    $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_line_user_id_unique ON users(line_user_id) WHERE line_user_id IS NOT NULL;");
+    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_users_line_bind_code ON users(line_bind_code);");
+    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_email_notifications_user_id ON email_notifications(user_id);");
     
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS achievements (

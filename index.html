@@ -184,10 +184,10 @@
 
                 <!-- 全域時間切換 -->
                 <div class="global-time-switch">
-                    <button class="g-time-btn active" onclick="setGlobalRange('1d')">1天</button>
-                    <button class="g-time-btn" onclick="setGlobalRange('1wk')">1周</button>
-                    <button class="g-time-btn" onclick="setGlobalRange('1m')">1月</button>
-                    <button class="g-time-btn" onclick="setGlobalRange('3m')">3月</button>
+                    <button class="g-time-btn active" data-range="1d" onclick="setGlobalRange('1d')">1天</button>
+                    <button class="g-time-btn" data-range="1wk" onclick="setGlobalRange('1wk')">1周</button>
+                    <button class="g-time-btn" data-range="1m" onclick="setGlobalRange('1m')">1月</button>
+                    <button class="g-time-btn" data-range="3m" onclick="setGlobalRange('3m')">3月</button>
                 </div>
             </div>
 
@@ -244,12 +244,19 @@
         <section id="section-leaderboard" class="container">
             <h2 style="text-align: center; margin-bottom: 2rem; font-size: 2.5rem;">排行榜</h2>
             <div class="leaderboard-card">
+                <div class="leaderboard-time-switch">
+                    <button class="g-time-btn" data-range="1d" onclick="setGlobalRange('1d')">1天</button>
+                    <button class="g-time-btn" data-range="1wk" onclick="setGlobalRange('1wk')">1周</button>
+                    <button class="g-time-btn" data-range="1m" onclick="setGlobalRange('1m')">1月</button>
+                    <button class="g-time-btn" data-range="3m" onclick="setGlobalRange('3m')">3月</button>
+                    <button class="g-time-btn" data-range="total" onclick="setGlobalRange('total')">總排行</button>
+                </div>
                 <table class="leaderboard-table" id="leaderboard-table">
                     <thead>
                         <tr>
                             <th>排名</th>
                             <th>用戶</th>
-                            <th>總消耗熱量 (kcal)</th>
+                            <th>消耗熱量 (kcal)</th>
                         </tr>
                     </thead>
                     <tbody id="leaderboard-body">

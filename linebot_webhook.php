@@ -2,16 +2,6 @@
 // linebot_webhook.php
 require_once 'config.php';
 
-// MET values shared logic
-const MET_VALUES = [
-    '跑步' => 10,
-    '重訓' => 4,
-    '腳踏車' => 8,
-    '游泳' => 6,
-    '瑜珈' => 3,
-    '其他' => 2
-];
-
 if (!$pdo) {
     error_log("linebot_webhook.php: DB connection failed");
     http_response_code(500);

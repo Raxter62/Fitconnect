@@ -7,6 +7,8 @@ ini_set('log_errors', '1');
 ob_start();
 
 try {
+    $coachAvailable = false;
+
     // Check and load config.php
     if (!file_exists(__DIR__ . '/config.php')) {
         throw new Exception('config.php not found in ' . __DIR__);
@@ -22,6 +24,9 @@ try {
     // Check and load mail.php (renamed from gamification.php)
     if (file_exists(__DIR__ . '/mail.php')) {
         require_once __DIR__ . '/mail.php';
+    }
+    if (file_exists(__DIR__ . '/workout.php')) {
+        require_once __DIR__ . '/workout.php';
     }
     
     session_start();
@@ -170,46 +175,22 @@ try {
         $date = $input['date'] ?? '';
         $type = $input['type'] ?? '';
         $minutes = intval($input['minutes'] ?? 0);
-        $calories = intval($input['calories'] ?? 0);
         
         if ($date === '' || $type === '' || $minutes <= 0) {
             sendResponse(['success' => false, 'message' => 'Invalid workout data']);
         }
-        
-        // Gamification: Get Pre-Update Ranks
-        $preRanks = function_exists('getCurrentRanks') ? getCurrentRanks($pdo) : [];
-        
-        $stmt = $pdo->prepare(
-            'INSERT INTO workouts (user_id, date, type, minutes, calories) VALUES (:uid, :date, :type, :min, :cal)'
-        );
-        $stmt->execute([
-            ':uid' => $_SESSION['user_id'],
-            ':date' => $date,
-            ':type' => $type,
-            ':min' => $minutes,
-            ':cal' => $calories
+
+        if (!function_exists('fc_record_workout')) {
+            throw new Exception('Workout helper not available');
+        }
+
+        $result = fc_record_workout($pdo, (int)$_SESSION['user_id'], $date, $type, $minutes);
+        sendResponse([
+            'success' => true,
+            'message' => 'Workout added',
+            'calories' => $result['calories'],
+            'achievements' => $result['achievements'],
         ]);
-        
-        // Update User Totals (Postgres UPSERT)
-        $stmt = $pdo->prepare(
-            'INSERT INTO user_totals (user_id, total_calories) VALUES (:uid, :cal) 
-             ON CONFLICT (user_id) DO UPDATE SET total_calories = user_totals.total_calories + :cal'
-        );
-        $stmt->execute([':uid' => $_SESSION['user_id'], ':cal' => $calories]);
-        
-        // Gamification Hooks
-        $achievements = [];
-        if (function_exists('checkAchievements')) {
-            $achievements = checkAchievements($pdo, $_SESSION['user_id']);
-        }
-        if (function_exists('checkLeaderboardChanges') && !empty($preRanks)) {
-            checkLeaderboardChanges($pdo, $preRanks);
-        }
-        if (function_exists('logLeaderboardSnapshot')) {
-            logLeaderboardSnapshot($pdo);
-        }
-        
-        sendResponse(['success' => true, 'message' => 'Workout added', 'achievements' => $achievements]);
     }
     
         if ($action === 'get_stats') {
@@ -405,35 +386,43 @@ try {
     }
     
     if ($action === 'get_leaderboard') {
-        $range = $_GET['range'] ?? '1m'; 
-        
-        $dateCondition = "DATE(w.date) >= CURRENT_DATE - INTERVAL '30 days'";
-        if ($range === '1d') {
-            $dateCondition = "DATE(w.date) >= CURRENT_DATE"; 
-        } elseif ($range === '1wk') {
-            $dateCondition = "DATE(w.date) >= date_trunc('week', CURRENT_DATE)";
-        } elseif ($range === '1m') {
-            $dateCondition = "DATE(w.date) >= date_trunc('month', CURRENT_DATE)";
-        } elseif ($range === '3m') {
-            $dateCondition = "DATE(w.date) >= date_trunc('month', CURRENT_DATE - INTERVAL '2 months')";
+        $range = $_GET['range'] ?? '1m';
+        $allowedRanges = ['1d', '1wk', '1m', '3m', 'total'];
+        if (!in_array($range, $allowedRanges, true)) {
+            $range = '1m';
         }
 
-        // Fetch ALL users rank based on user_totals (All Time Accumulation)
-        // This solves the issue of Leaderboard resetting or dropping data when the date range (e.g. year) changes.
-        // User explicitly requested "Total" to prevent data deletion perception.
-        
-        $limitCondition = ""; 
-        // If we really want to support ranges for Leaderboard, we can keep the old logic for specific ranges,
-        // but given the user report, "Total" seems to be what matters most.
-        // Let's use user_totals for the main score.
-        
-        $stmt = $pdo->prepare(
-            "SELECT u.id, u.display_name, t.total_calories as total, u.avatar_id
-             FROM users u 
-             JOIN user_totals t ON u.id = t.user_id 
-             ORDER BY total DESC"
-        );
-        $stmt->execute();
+        if ($range === 'total') {
+            $stmt = $pdo->prepare(
+                "SELECT u.id, u.display_name, COALESCE(t.total_calories, 0) as total, u.avatar_id
+                 FROM users u
+                 LEFT JOIN user_totals t ON u.id = t.user_id
+                 WHERE COALESCE(t.total_calories, 0) > 0
+                 ORDER BY total DESC, u.id ASC"
+            );
+            $stmt->execute();
+        } else {
+            $dateCondition = "w.date >= date_trunc('month', CURRENT_DATE)";
+            if ($range === '1d') {
+                $dateCondition = "w.date >= CURRENT_DATE";
+            } elseif ($range === '1wk') {
+                $dateCondition = "w.date >= date_trunc('week', CURRENT_DATE)";
+            } elseif ($range === '3m') {
+                $dateCondition = "w.date >= date_trunc('month', CURRENT_DATE - INTERVAL '2 months')";
+            }
+
+            $stmt = $pdo->prepare(
+                "SELECT u.id, u.display_name, COALESCE(SUM(w.calories), 0) as total, u.avatar_id
+                 FROM users u
+                 JOIN workouts w ON u.id = w.user_id
+                 WHERE {$dateCondition}
+                 GROUP BY u.id, u.display_name, u.avatar_id
+                 HAVING COALESCE(SUM(w.calories), 0) > 0
+                 ORDER BY total DESC, u.id ASC"
+            );
+            $stmt->execute();
+        }
+
         $allRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         // Calculate Ranks

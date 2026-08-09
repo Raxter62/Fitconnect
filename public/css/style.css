@@ -470,6 +470,14 @@ body {
     /* Fix clickability */
 }
 
+.leaderboard-time-switch {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 0 auto 18px;
+}
+
 .charts-grid-advanced {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
