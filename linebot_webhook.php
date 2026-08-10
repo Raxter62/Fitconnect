@@ -1,5 +1,33 @@
 <?php
 // linebot_webhook.php
+
+// =============================================
+// 1. Verify LINE webhook signature FIRST
+// =============================================
+
+$input = file_get_contents('php://input');
+
+$signature = $_SERVER['HTTP_X_LINE_SIGNATURE'] ?? '';
+$channelSecret = getenv('LINE_CHANNEL_SECRET') ?: '';
+
+if ($channelSecret === '' || $signature === '') {
+    error_log('LINE webhook: missing channel secret or signature');
+    http_response_code(400);
+    exit;
+}
+
+$expectedSignature = base64_encode(
+    hash_hmac('sha256', $input, $channelSecret, true)
+);
+
+if (!hash_equals($expectedSignature, $signature)) {
+    error_log('LINE webhook: invalid signature');
+    http_response_code(403);
+    exit;
+}
+
+// Signature passed.
+// Now load DB/application config.
 require_once 'config.php';
 
 if (!$pdo) {
@@ -8,8 +36,7 @@ if (!$pdo) {
     exit;
 }
 
-// 1. 取得原始輸入
-$input = file_get_contents('php://input');
+
 $events = json_decode($input, true);
 
 if (!isset($events['events'])) {
@@ -97,6 +124,13 @@ function replyMainMenu($replyToken) {
     if (!defined('LINE_CHANNEL_TOKEN')) return;
     $accessToken = LINE_CHANNEL_TOKEN;
 
+    $baseUrl = rtrim(getenv('APP_BASE_URL') ?: '', '/');
+
+    if ($baseUrl === '') {
+        error_log('APP_BASE_URL is missing');
+        return;
+    }
+
     $url = "https://api.line.me/v2/bot/message/reply";
     $data = [
         "replyToken" => $replyToken,
@@ -106,7 +140,7 @@ function replyMainMenu($replyToken) {
                 "altText" => "FitConnect 選單",
                 "template" => [
                     "type" => "buttons",
-                    "thumbnailImageUrl" => "https://fitconnect.up.railway.app/public/image/logo/logo.png",
+                    "thumbnailImageUrl" => $baseUrl . "/public/image/logo/logo.png",
                     "imageAspectRatio" => "rectangle",
                     "imageSize" => "cover",
                     "imageBackgroundColor" => "#FFFFFF",
@@ -115,28 +149,28 @@ function replyMainMenu($replyToken) {
                     "defaultAction" => [
                         "type" => "uri",
                         "label" => "View detail",
-                        "uri" => "https://fitconnect.up.railway.app/"
+                        "uri" => $baseUrl . "/"
                     ],
                     "actions" => [
                         [
                             "type" => "uri",
                             "label" => "🔗 帳號綁定",
-                            "uri" => "https://liff.line.me/" . (defined('LIFF_ID') ? LIFF_ID : '') . "?path=bind"
+                            "uri" => "https://liff.line.me/" . (defined('LIFF_ID') ? LIFF_ID : '') . "/?path=bind"
                         ],
                         [
                             "type" => "uri",
                             "label" => "🏃 新增運動",
-                            "uri" => "https://liff.line.me/" . (defined('LIFF_ID') ? LIFF_ID : '') . "?path=workout"
+                            "uri" => "https://liff.line.me/" . (defined('LIFF_ID') ? LIFF_ID : '') . "/?path=workout"
                         ],
                         [
                             "type" => "uri",
                             "label" => "📝 個人資料",
-                            "uri" => "https://liff.line.me/" . (defined('LIFF_ID') ? LIFF_ID : '') . "?path=profile"
+                            "uri" => "https://liff.line.me/" . (defined('LIFF_ID') ? LIFF_ID : '') . "/?path=profile"
                         ],
                         [
                             "type" => "uri",
                             "label" => "🌐 開啟網頁",
-                            "uri" => "https://fitconnect.up.railway.app/"
+                            "uri" => $baseUrl . "/"
                         ]
                     ]
                 ]
