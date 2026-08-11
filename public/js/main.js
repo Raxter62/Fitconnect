@@ -8,6 +8,8 @@ let bindPollInterval = null;
 let leaderboardPollInterval = null; // 排行榜即時更新 Timer
 let deferredPrompt = null; // PWA Install Prompt
 let csrfToken = '';
+const leaderboardRanges = ['1d', '1wk', '1m', '3m', 'total'];
+let leaderboardLoadSeq = 0;
 
 // === PWA Install Logic ===
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -504,6 +506,8 @@ async function handleAddWorkout(e) {
 }
 
 function setGlobalRange(range) {
+    const previousRange = globalTimeRange;
+    const shouldAnimateLeaderboard = previousRange !== range;
     globalTimeRange = range;
 
     // Update active button state
@@ -514,9 +518,19 @@ function setGlobalRange(range) {
     if (range !== 'total') {
         fetchStats(range);
     }
-    loadLeaderboard();
+    loadLeaderboard({
+        animate: shouldAnimateLeaderboard,
+        direction: getLeaderboardDirection(previousRange, range)
+    });
 }
 window.setGlobalRange = setGlobalRange;
+
+function getLeaderboardDirection(previousRange, nextRange) {
+    const previousIndex = leaderboardRanges.indexOf(previousRange);
+    const nextIndex = leaderboardRanges.indexOf(nextRange);
+    if (previousIndex === -1 || nextIndex === -1) return 'forward';
+    return nextIndex >= previousIndex ? 'forward' : 'back';
+}
 
 async function fetchStats(range) {
     const charts = document.querySelectorAll('.chart-box canvas');
@@ -808,9 +822,54 @@ function renderCalorieChart(data, range) {
     }
 }
 
-async function loadLeaderboard() {
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function prefersReducedMotion() {
+    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function setLeaderboardTransitionState(state, direction = 'forward') {
+    const card = document.querySelector('.leaderboard-card');
+    const table = document.getElementById('leaderboard-table');
+    if (!card || !table) return;
+
+    card.classList.toggle('leaderboard-is-switching', state === 'out');
+    table.classList.remove(
+        'leaderboard-slide-forward',
+        'leaderboard-slide-back',
+        'leaderboard-table-out',
+        'leaderboard-table-in'
+    );
+
+    if (state === 'out') {
+        table.classList.add(
+            direction === 'back' ? 'leaderboard-slide-back' : 'leaderboard-slide-forward',
+            'leaderboard-table-out'
+        );
+    } else if (state === 'in') {
+        table.classList.add(
+            direction === 'back' ? 'leaderboard-slide-back' : 'leaderboard-slide-forward',
+            'leaderboard-table-in'
+        );
+        window.setTimeout(() => table.classList.remove('leaderboard-table-in'), 360);
+    }
+}
+
+async function loadLeaderboard(options = {}) {
     const tbody = document.querySelector('#leaderboard-table tbody');
     if (!tbody) return;
+
+    const loadSeq = ++leaderboardLoadSeq;
+    const shouldAnimate = options.animate === true && !prefersReducedMotion();
+    const direction = options.direction || 'forward';
+
+    if (shouldAnimate) {
+        setLeaderboardTransitionState('out', direction);
+        await delay(140);
+        if (loadSeq !== leaderboardLoadSeq) return;
+    }
 
     try {
         const range = globalTimeRange || '1m';
@@ -818,8 +877,11 @@ async function loadLeaderboard() {
             ? { success: true, range, data: [{ rank: 1, display_name: 'Demo Hero', total: range === 'total' ? 1800 : 180 }] }
             : await (await fetch(`${API_URL}?action=get_leaderboard&range=${encodeURIComponent(range)}&t=${Date.now()}`, { credentials: 'same-origin' })).json();
 
+        if (loadSeq !== leaderboardLoadSeq) return;
+
         if (!json.success || !json.data || !json.data.length) {
             setLeaderboardMessage(tbody, '暫無資料');
+            if (shouldAnimate) setLeaderboardTransitionState('in', direction);
             return;
         }
 
@@ -850,9 +912,13 @@ async function loadLeaderboard() {
             renderRow(tbody, json.user_rank, json.user_rank.rank, true);
         }
 
+        if (shouldAnimate) setLeaderboardTransitionState('in', direction);
+
     } catch (e) {
+        if (loadSeq !== leaderboardLoadSeq) return;
         console.error('Leaderboard error:', e);
         setLeaderboardMessage(tbody, '載入失敗');
+        if (shouldAnimate) setLeaderboardTransitionState('in', direction);
     }
 }
 

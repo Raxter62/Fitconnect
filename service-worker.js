@@ -3,7 +3,7 @@
 
 // 每次更新前端資源（main.js / css / html）都要更新版本號，讓瀏覽器抓新檔。
 // 這不會改變任何功能，只是讓瀏覽器知道要更新快取。
-const CACHE_VERSION = 'v5-2026-08-11-security-refresh';
+const CACHE_VERSION = 'v6-2026-08-12-leaderboard-transition';
 const CACHE_NAME = `fitconnect-${CACHE_VERSION}`;
 
 const ASSETS_TO_CACHE = [
