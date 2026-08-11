@@ -46,3 +46,10 @@ cache/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# =========================
+# Development / Test tools
+# =========================
+db_test.php
+test_email.php
+/docs

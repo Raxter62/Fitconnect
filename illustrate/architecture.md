@@ -92,8 +92,10 @@ sequenceDiagram
     API->>API: Verify Password Hash
     alt 驗證成功
         API->>API: Set $_SESSION['user_id']
-        API-->>FE: Return Success
-        FE->>FE: checkLogin() (Auto Redirect)
+        API-->>FE: Return Success + CSRF Token
+        FE->>API: GET ?action=get_user_info
+        API-->>FE: Return User Info
+        FE->>FE: showDashboard()
     else 驗證失敗
         API-->>FE: Return Error
     end

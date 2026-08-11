@@ -1,6 +1,11 @@
 <?php
 declare(strict_types=1);
 
+if (getenv('ALLOW_DEBUG_TOOLS') !== '1') {
+    http_response_code(404);
+    exit('Not found');
+}
+
 function env_str(string $k): string {
     $v = getenv($k);
     if ($v === false) return '';

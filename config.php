@@ -5,14 +5,22 @@ declare(strict_types=1);
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
+function fc_is_debug_env(): bool {
+    $env = strtolower((string)(getenv('APP_ENV') ?: ''));
+    return in_array($env, ['dev', 'development', 'local'], true);
+}
+
 function fc_json_fatal(string $msg, ?string $detail = null): void {
     http_response_code(500);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode([
+    $payload = [
         'success' => false,
         'message' => $msg,
-        'error'   => $detail,
-    ], JSON_UNESCAPED_UNICODE);
+    ];
+    if (fc_is_debug_env() && $detail !== null) {
+        $payload['error'] = $detail;
+    }
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -145,6 +153,15 @@ try {
     ");
 
     $pdo->exec("
+        INSERT INTO user_totals (user_id, total_calories)
+        SELECT user_id, COALESCE(SUM(calories), 0)::BIGINT
+        FROM workouts
+        GROUP BY user_id
+        ON CONFLICT (user_id)
+        DO UPDATE SET total_calories = EXCLUDED.total_calories;
+    ");
+
+    $pdo->exec("
         CREATE TABLE IF NOT EXISTS leaderboard_snapshots (
             id BIGSERIAL PRIMARY KEY,
             date DATE NOT NULL,
@@ -166,7 +183,21 @@ try {
 
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_workouts_user_date ON workouts(user_id, date);");
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_leaderboard_date ON leaderboard_snapshots(date);");
-    $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_line_user_id_unique ON users(line_user_id) WHERE line_user_id IS NOT NULL;");
+    $duplicateLineIds = (int)$pdo->query("
+        SELECT COUNT(*)
+        FROM (
+            SELECT line_user_id
+            FROM users
+            WHERE line_user_id IS NOT NULL
+            GROUP BY line_user_id
+            HAVING COUNT(*) > 1
+        ) dup
+    ")->fetchColumn();
+    if ($duplicateLineIds === 0) {
+        $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_line_user_id_unique ON users(line_user_id) WHERE line_user_id IS NOT NULL;");
+    } else {
+        error_log('Skipped idx_users_line_user_id_unique because duplicate line_user_id values exist.');
+    }
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_users_line_bind_code ON users(line_bind_code);");
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_email_notifications_user_id ON email_notifications(user_id);");
     

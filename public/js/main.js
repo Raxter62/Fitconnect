@@ -7,6 +7,7 @@ let globalTimeRange = '1d';
 let bindPollInterval = null;
 let leaderboardPollInterval = null; // 排行榜即時更新 Timer
 let deferredPrompt = null; // PWA Install Prompt
+let csrfToken = '';
 
 // === PWA Install Logic ===
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -95,7 +96,6 @@ function initApp() {
     setTimeout(() => {
         console.log('🔧 開始設置應用程式...');
 
-        // checkLogin(); // Auto-login disabled by user request
         showLogin(); // Force login screen by default
         setupForms();
         generateAvatarGrid();
@@ -111,34 +111,13 @@ function setupDateTimeDefaults() {
     // 移除預設時間設定，保持輸入框空白
 }
 
-// === Auth ===
-async function checkLogin() {
-    console.log('🔍 檢查登入狀態...');
-    try {
-        const res = await fetch(`${API_URL}?action=get_user_info`, { credentials: 'same-origin' });
-        // Check for non-OK HTTP status before parsing JSON
-        if (!res.ok) {
-            console.log(`ℹ️ 未登入 (HTTP Status: ${res.status})`);
-            showLogin();
-            return; // Exit early if response is not OK
-        }
-        const json = await res.json();
-
-        if (json.success && json.data) {
-            console.log('✅ 已登入:', json.data);
-            currentUser = json.data;
-            showDashboard();
-            if (window.startAutoRefresh) window.startAutoRefresh(); // Start polling
-        } else {
-            console.log('ℹ️ 未登入');
-            showLogin();
-        }
-    } catch (e) {
-        console.error('❌ 檢查登入失敗:', e);
-        showLogin();
-    }
+function authJsonHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    return headers;
 }
 
+// === Auth ===
 function showLogin() {
     const authView = document.getElementById('auth-view');
     const dashboardView = document.getElementById('dashboard-view');
@@ -263,6 +242,7 @@ async function logout() {
     // stopLeaderboardPolling(); // Deprecated
     isDemoMode = false;
     currentUser = null;
+    csrfToken = '';
 
     // 直接切換回登入頁面（不重新載入）
     showLogin();
@@ -374,6 +354,7 @@ async function handleLogin(e) {
         console.log('📥 登入回應:', json);
 
         if (json.success) {
+            if (json.csrf_token) csrfToken = json.csrf_token;
             console.log('✅ 登入成功，載入使用者資訊...');
 
             // 取得使用者資訊
@@ -381,6 +362,7 @@ async function handleLogin(e) {
                 credentials: 'same-origin'
             });
             const userData = await userRes.json();
+            if (userData.csrf_token) csrfToken = userData.csrf_token;
 
             if (userData.success && userData.data) {
                 console.log('✅ 使用者資訊:', userData.data);
@@ -430,6 +412,7 @@ async function handleRegister(e) {
         console.log('📥 註冊回應:', json);
 
         if (json.success) {
+            if (json.csrf_token) csrfToken = json.csrf_token;
             console.log('✅ 註冊成功，載入使用者資訊...');
 
             // 取得使用者資訊
@@ -437,6 +420,7 @@ async function handleRegister(e) {
                 credentials: 'same-origin'
             });
             const userData = await userRes.json();
+            if (userData.csrf_token) csrfToken = userData.csrf_token;
 
             if (userData.success && userData.data) {
                 console.log('✅ 使用者資訊:', userData.data);
@@ -626,15 +610,46 @@ function getDateRangeString(range) {
 function showAchievementNotification(title, imgName) {
     const notifyBox = document.createElement('div');
     notifyBox.className = 'achievement-notification';
-    notifyBox.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 15px;">
-            <img src="public/image/Achievement/${imgName}" alt="Medal" style="width: 50px; height: 50px; object-fit: contain;">
-            <div>
-                <h4 style="margin: 0; color: #ff9800; font-size: 1.1rem;">🏆 成就解鎖！</h4>
-                <p style="margin: 5px 0 0 0; color: #333; font-weight: bold;">${title}</p>
-            </div>
-        </div>
-    `;
+
+    const safeImgName = /^[a-zA-Z0-9._-]+$/.test(String(imgName)) ? imgName : 'first.png';
+    const content = document.createElement('div');
+    Object.assign(content.style, {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '15px'
+    });
+
+    const medalImg = document.createElement('img');
+    medalImg.src = `public/image/Achievement/${safeImgName}`;
+    medalImg.alt = 'Medal';
+    Object.assign(medalImg.style, {
+        width: '50px',
+        height: '50px',
+        objectFit: 'contain'
+    });
+
+    const textWrap = document.createElement('div');
+    const heading = document.createElement('h4');
+    heading.textContent = '🏆 成就解鎖！';
+    Object.assign(heading.style, {
+        margin: '0',
+        color: '#ff9800',
+        fontSize: '1.1rem'
+    });
+
+    const titleText = document.createElement('p');
+    titleText.textContent = String(title || '');
+    Object.assign(titleText.style, {
+        margin: '5px 0 0 0',
+        color: '#333',
+        fontWeight: 'bold'
+    });
+
+    textWrap.appendChild(heading);
+    textWrap.appendChild(titleText);
+    content.appendChild(medalImg);
+    content.appendChild(textWrap);
+    notifyBox.appendChild(content);
 
     // Style (Inline for simplicity or add to CSS)
     Object.assign(notifyBox.style, {
@@ -804,7 +819,7 @@ async function loadLeaderboard() {
             : await (await fetch(`${API_URL}?action=get_leaderboard&range=${encodeURIComponent(range)}&t=${Date.now()}`, { credentials: 'same-origin' })).json();
 
         if (!json.success || !json.data || !json.data.length) {
-            tbody.innerHTML = '<tr><td colspan="3">暫無資料</td></tr>';
+            setLeaderboardMessage(tbody, '暫無資料');
             return;
         }
 
@@ -819,7 +834,16 @@ async function loadLeaderboard() {
         if (json.user_rank && json.user_rank.rank > 10) {
             // 分隔線
             const sep = document.createElement('tr');
-            sep.innerHTML = `<td colspan="3" style="text-align: center; color: #999; letter-spacing: 5px; background: rgba(0,0,0,0.02);">...</td>`;
+            const sepCell = document.createElement('td');
+            sepCell.colSpan = 3;
+            sepCell.textContent = '...';
+            Object.assign(sepCell.style, {
+                textAlign: 'center',
+                color: '#999',
+                letterSpacing: '5px',
+                background: 'rgba(0,0,0,0.02)'
+            });
+            sep.appendChild(sepCell);
             tbody.appendChild(sep);
 
             // 使用者行
@@ -828,8 +852,18 @@ async function loadLeaderboard() {
 
     } catch (e) {
         console.error('Leaderboard error:', e);
-        tbody.innerHTML = '<tr><td colspan="3">載入失敗</td></tr>';
+        setLeaderboardMessage(tbody, '載入失敗');
     }
+}
+
+function setLeaderboardMessage(tbody, message) {
+    tbody.innerHTML = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 3;
+    td.textContent = message;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
 }
 
 function renderRow(tbody, u, rankVal, isSticky = false) {
@@ -850,11 +884,23 @@ function renderRow(tbody, u, rankVal, isSticky = false) {
 
     const name = u.display_name || 'User';
 
-    tr.innerHTML = `
-        <td><span style="font-size: 1.2rem;">${rankLabel}</span></td>
-        <td><strong>${name}</strong></td>
-        <td>${u.total}</td>
-    `;
+    const rankCell = document.createElement('td');
+    const rankSpan = document.createElement('span');
+    rankSpan.style.fontSize = '1.2rem';
+    rankSpan.textContent = String(rankLabel);
+    rankCell.appendChild(rankSpan);
+
+    const nameCell = document.createElement('td');
+    const nameStrong = document.createElement('strong');
+    nameStrong.textContent = name;
+    nameCell.appendChild(nameStrong);
+
+    const totalCell = document.createElement('td');
+    totalCell.textContent = String(u.total ?? 0);
+
+    tr.appendChild(rankCell);
+    tr.appendChild(nameCell);
+    tr.appendChild(totalCell);
 
     // Highlight if current user
     if ((currentUser && name === currentUser.display_name) || isSticky) {
@@ -900,7 +946,7 @@ async function fetchPost(action, data = {}) {
 
     const res = await fetch(`${API_URL}?action=${encodeURIComponent(action)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authJsonHeaders(),
         credentials: 'same-origin',
         body: JSON.stringify(data)
     });
@@ -1067,17 +1113,17 @@ function showEditProfileModal() {
             
             <div style="margin-bottom: 1rem;">
                 <label style="display: block; margin-bottom: 0.5rem; color: #666; font-weight: 600;">暱稱</label>
-                <input type="text" id="modal-name" value="${currentName}" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1rem;">
+                <input type="text" id="modal-name" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1rem;">
             </div>
 
             <div style="margin-bottom: 1rem;">
                 <label style="display: block; margin-bottom: 0.5rem; color: #666; font-weight: 600;">身高 (cm)</label>
-                <input type="number" id="modal-height" value="${currentHeight}" placeholder="例如：170" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1rem;">
+                <input type="number" id="modal-height" placeholder="例如：170" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1rem;">
             </div>
             
             <div style="margin-bottom: 1.5rem;">
                 <label style="display: block; margin-bottom: 0.5rem; color: #666; font-weight: 600;">體重 (kg)</label>
-                <input type="number" id="modal-weight" value="${currentWeight}" placeholder="例如：65" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1rem;">
+                <input type="number" id="modal-weight" placeholder="例如：65" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1rem;">
             </div>
             
             <div style="display: flex; gap: 1rem;">
@@ -1102,6 +1148,9 @@ function showEditProfileModal() {
     document.head.appendChild(style);
 
     document.body.appendChild(modal);
+    document.getElementById('modal-name').value = currentName;
+    document.getElementById('modal-height').value = currentHeight;
+    document.getElementById('modal-weight').value = currentWeight;
 
     // 點擊背景關閉
     modal.addEventListener('click', function (e) {
@@ -1151,7 +1200,7 @@ async function saveProfile() {
     try {
         const res = await fetch(`${API_URL}?action=update_profile`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authJsonHeaders(),
             credentials: 'same-origin',
             body: JSON.stringify({ display_name, height, weight })
         });
@@ -1246,7 +1295,8 @@ async function updateAvatarOnServer(avatarId) {
     try {
         const res = await fetch(`${API_URL}?action=update_avatar`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authJsonHeaders(),
+            credentials: 'same-origin',
             body: JSON.stringify({ avatar_id: avatarId })
         });
 
@@ -1272,7 +1322,7 @@ window.generateBindCode = async function () {
     try {
         const res = await fetch(`${API_URL}?action=generate_bind_code`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authJsonHeaders(),
             credentials: 'same-origin'
         });
         const json = await res.json();
@@ -1358,6 +1408,7 @@ window.unbindLine = async function () {
     try {
         const res = await fetch(`${API_URL}?action=line_unbind`, {
             method: 'POST',
+            headers: authJsonHeaders(),
             credentials: 'same-origin'
         });
         const json = await res.json();
@@ -1458,12 +1509,4 @@ function startAutoRefresh() {
 
     }, 30000); // 30 seconds
 }
-
-// Start on load (initApp will handle login check, but we can call it here too)
-// Better to call it after successful login in showDashboard or initApp
-// Let's attach it to window for now and call it inside initApp if logged in.
-window.startAutoRefresh = startAutoRefresh;
-
-// Call it in initApp if logged in
-const originalInit = window.onload; // Or just add to existing initApp
 

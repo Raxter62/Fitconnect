@@ -2,6 +2,11 @@
 // test_email.php
 // 用於手動測試 Resend Email 發送功能
 
+if (getenv('ALLOW_DEBUG_TOOLS') !== '1') {
+    http_response_code(404);
+    exit('Not found');
+}
+
 error_reporting(E_ALL);
 ini_set('display_errors', '1');
 

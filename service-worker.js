@@ -1,9 +1,9 @@
 // service-worker.js
 // 目標：保留原本離線快取功能，但修復「永遠吃到舊 main.js」的問題（cache-first + 固定版本號）。
 
-// 每次你更新前端資源（main.js / css / html），把版本號改一下即可。
+// 每次更新前端資源（main.js / css / html）都要更新版本號，讓瀏覽器抓新檔。
 // 這不會改變任何功能，只是讓瀏覽器知道要更新快取。
-const CACHE_VERSION = 'v4-2025-12-31-cleanup-complete';
+const CACHE_VERSION = 'v5-2026-08-11-security-refresh';
 const CACHE_NAME = `fitconnect-${CACHE_VERSION}`;
 
 const ASSETS_TO_CACHE = [

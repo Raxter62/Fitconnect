@@ -146,8 +146,16 @@ function checkAchievements(PDO $pdo, int $userId): array {
     foreach ($rules as $rule) {
         if (!in_array($rule['id'], $existing) && $rule['cond']()) {
             // Unlock!
-            $stmt = $pdo->prepare("INSERT INTO achievements (user_id, type) VALUES (?, ?)");
+            $stmt = $pdo->prepare("
+                INSERT INTO achievements (user_id, type)
+                VALUES (?, ?)
+                ON CONFLICT (user_id, type) DO NOTHING
+                RETURNING type
+            ");
             $stmt->execute([$userId, $rule['id']]);
+            if (!$stmt->fetchColumn()) {
+                continue;
+            }
             // Return full info for frontend notification
             $newlyUnlocked[] = ['title' => $rule['title'], 'img' => $rule['img']];
 

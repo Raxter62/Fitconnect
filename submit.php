@@ -4,6 +4,27 @@ error_reporting(E_ALL);
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
 
+function fc_api_is_dev(): bool {
+    $env = strtolower((string)(getenv('APP_ENV') ?: ''));
+    return in_array($env, ['dev', 'development', 'local'], true);
+}
+
+function fc_api_error_payload(string $message, Throwable $e): array {
+    $payload = [
+        'success' => false,
+        'message' => $message,
+    ];
+
+    if (fc_api_is_dev()) {
+        $payload['error'] = $e->getMessage();
+        $payload['file'] = $e->getFile();
+        $payload['line'] = $e->getLine();
+        $payload['type'] = get_class($e);
+    }
+
+    return $payload;
+}
+
 ob_start();
 
 try {
@@ -59,9 +80,59 @@ try {
         echo json_encode($data, JSON_UNESCAPED_UNICODE);
         exit;
     }
+
+    function csrfToken(): string {
+        if (empty($_SESSION['csrf_token'])) {
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+        }
+        return $_SESSION['csrf_token'];
+    }
+
+    function requirePost(string $action): void {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            http_response_code(405);
+            sendResponse([
+                'success' => false,
+                'message' => "Action {$action} requires POST",
+            ]);
+        }
+    }
+
+    function requireCsrf(array $input): void {
+        $submitted = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($input['csrf_token'] ?? '');
+        $expected = csrfToken();
+
+        if (!is_string($submitted) || !hash_equals($expected, $submitted)) {
+            http_response_code(403);
+            sendResponse([
+                'success' => false,
+                'message' => 'Invalid CSRF token',
+            ]);
+        }
+    }
     
     $input = getJsonInput();
     $action = $input['action'] ?? ($_GET['action'] ?? '');
+
+    $postActions = [
+        'register',
+        'login',
+        'logout',
+        'update_profile',
+        'update_avatar',
+        'add_workout',
+        'generate_bind_code',
+        'line_unbind',
+        'ai_coach',
+    ];
+    $csrfExemptActions = ['register', 'login'];
+
+    if (in_array($action, $postActions, true)) {
+        requirePost($action);
+        if (!in_array($action, $csrfExemptActions, true)) {
+            requireCsrf($input);
+        }
+    }
     
     // === Authentication Actions ===
     if ($action === 'register') {
@@ -82,8 +153,10 @@ try {
         
         if ($stmt->execute([':email' => $email, ':hash' => $hash, ':name' => $name])) {
             $newUser = $stmt->fetch(PDO::FETCH_ASSOC);
+            session_regenerate_id(true);
             $_SESSION['user_id'] = $newUser['id'];
-            sendResponse(['success' => true, 'message' => 'Registration successful']);
+            unset($_SESSION['csrf_token']);
+            sendResponse(['success' => true, 'message' => 'Registration successful', 'csrf_token' => csrfToken()]);
         }
         
         sendResponse(['success' => false, 'message' => 'Registration failed']);
@@ -105,8 +178,10 @@ try {
             sendResponse(['success' => false, 'message' => 'Invalid email or password']);
         }
         
+        session_regenerate_id(true);
         $_SESSION['user_id'] = $user['id'];
-        sendResponse(['success' => true, 'message' => 'Login successful']);
+        unset($_SESSION['csrf_token']);
+        sendResponse(['success' => true, 'message' => 'Login successful', 'csrf_token' => csrfToken()]);
     }
     
     if ($action === 'logout') {
@@ -127,7 +202,7 @@ try {
             sendResponse(['success' => false, 'message' => 'User not found']);
         }
         
-        sendResponse(['success' => true, 'data' => $user]);
+        sendResponse(['success' => true, 'data' => $user, 'csrf_token' => csrfToken()]);
     }
     
     // === Profile Actions ===
@@ -373,7 +448,12 @@ try {
             }
             
         } catch (Exception $e) {
-            // Log error
+            error_log('get_stats failed: ' . $e->getMessage());
+            http_response_code(500);
+            sendResponse([
+                'success' => false,
+                'message' => 'Stats query failed',
+            ]);
         }
         
         sendResponse([
@@ -462,7 +542,6 @@ try {
         }
         
         $code = strtoupper(bin2hex(random_bytes(3)));
-        $code = strtoupper(bin2hex(random_bytes(3)));
         
         $stmt = $pdo->prepare(
             "UPDATE users SET line_bind_code = :code, line_bind_code_expires_at = NOW() + INTERVAL '10 minutes' WHERE id = :uid"
@@ -515,39 +594,18 @@ try {
 } catch (PDOException $e) {
     ob_end_clean();
     http_response_code(500);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Database error: ' . $e->getMessage(), // Added message key
-        'error' => 'Database error: ' . $e->getMessage(),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-        'type' => 'PDOException'
-    ], JSON_UNESCAPED_UNICODE);
+    echo json_encode(fc_api_error_payload('Database error', $e), JSON_UNESCAPED_UNICODE);
     exit;
     
 } catch (Exception $e) {
     ob_end_clean();
     http_response_code(500);
-    echo json_encode([
-        'success' => false,
-        'message' => $e->getMessage(), // Added message key
-        'error' => $e->getMessage(),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-        'type' => 'Exception'
-    ], JSON_UNESCAPED_UNICODE);
+    echo json_encode(fc_api_error_payload('Server error', $e), JSON_UNESCAPED_UNICODE);
     exit;
     
 } catch (Throwable $e) {
     ob_end_clean();
     http_response_code(500);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Fatal error: ' . $e->getMessage(), // Added message key
-        'error' => 'Fatal error: ' . $e->getMessage(),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-        'type' => 'Throwable'
-    ], JSON_UNESCAPED_UNICODE);
+    echo json_encode(fc_api_error_payload('Fatal server error', $e), JSON_UNESCAPED_UNICODE);
     exit;
 }
