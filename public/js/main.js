@@ -1009,7 +1009,24 @@ async function fetchPost(action, data = {}) {
     }
 
     console.log(`📤 API 請求: ${action}`);
+    const json = await postJson(action, data);
 
+    if (
+        json &&
+        json.success === false &&
+        json.message === 'Invalid CSRF token' &&
+        !['login', 'register'].includes(action)
+    ) {
+        const refreshed = await refreshCsrfToken();
+        if (refreshed) {
+            return postJson(action, data);
+        }
+    }
+
+    return json;
+}
+
+async function postJson(action, data = {}) {
     const res = await fetch(`${API_URL}?action=${encodeURIComponent(action)}`, {
         method: 'POST',
         headers: authJsonHeaders(),
@@ -1027,6 +1044,22 @@ async function fetchPost(action, data = {}) {
         console.error('❌ API 回應不是 JSON:', text);
         throw new Error('API 回傳不是 JSON（請檢查 submit.php 是否有錯誤）');
     }
+}
+
+async function refreshCsrfToken() {
+    try {
+        const res = await fetch(`${API_URL}?action=get_user_info&t=${Date.now()}`, {
+            credentials: 'same-origin'
+        });
+        const json = await res.json();
+        if (json.success && json.csrf_token) {
+            csrfToken = json.csrf_token;
+            return true;
+        }
+    } catch (e) {
+        console.error('❌ CSRF token 更新失敗:', e);
+    }
+    return false;
 }
 
 function updateProfileUI() {
