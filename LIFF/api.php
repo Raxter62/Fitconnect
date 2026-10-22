@@ -3,13 +3,41 @@
 require_once '../config.php';
 require_once __DIR__ . '/../mail.php';
 require_once __DIR__ . '/../workout.php';
+require_once __DIR__ . '/../auth.php';
 
 header('Content-Type: application/json');
+header('Cache-Control: no-store, private');
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'message' => '此操作需要 POST。']);
+    exit;
+}
 
 // Helper to get raw input
 $input = json_decode(file_get_contents('php://input'), true);
 $action = $_GET['action'] ?? $input['action'] ?? '';
-$lineUserId = $input['lineUserId'] ?? '';
+$idToken = is_string($input['idToken'] ?? null) ? $input['idToken'] : '';
+$channelId = fc_env_str('LINE_LOGIN_CHANNEL_ID');
+$lineUserId = '';
+if ($channelId === '' || $idToken === '') {
+    http_response_code(401);
+    echo json_encode(['success' => false, 'message' => '無法驗證 LINE 身分，請重新開啟頁面或聯絡管理員。']);
+    exit;
+}
+$verify = curl_init('https://api.line.me/oauth2/v2.1/verify');
+curl_setopt_array($verify, [
+    CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_POSTFIELDS => http_build_query(['id_token' => $idToken, 'client_id' => $channelId]),
+    CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => 10,
+]);
+$verified = curl_exec($verify);
+$verifyStatus = (int)curl_getinfo($verify, CURLINFO_HTTP_CODE);
+curl_close($verify);
+$identity = is_string($verified) ? json_decode($verified, true) : null;
+if ($verifyStatus === 200 && is_array($identity) && is_string($identity['sub'] ?? null)
+    && (string)($identity['aud'] ?? '') === $channelId && (int)($identity['exp'] ?? 0) > time()) {
+    $lineUserId = $identity['sub'];
+}
 
 if (!$pdo) {
     error_log("LIFF/api.php: DB Connection Failed");
@@ -25,7 +53,7 @@ try {
 }
 
 if (!$lineUserId) {
-    error_log("LIFF/api.php: Missing Line User ID. Input: " . print_r($input, true));
+    http_response_code(401);
     echo json_encode(['success' => false, 'message' => 'Missing Line User ID']);
     exit;
 }
@@ -39,6 +67,11 @@ function getUserByLineId($pdo, $lineId) {
 
 // Actions
 try {
+    if (!fc_rate_limit($pdo, 'liff:' . $lineUserId, 60, 60)) {
+        http_response_code(429);
+        echo json_encode(['success' => false, 'message' => '操作過於頻繁，請稍後再試。']);
+        exit;
+    }
     if ($action === 'get_user_status') {
         $user = getUserByLineId($pdo, $lineUserId);
         if ($user) {
@@ -58,19 +91,18 @@ try {
     
     elseif ($action === 'bind_user') {
         $code = strtoupper(trim($input['code'] ?? ''));
-        error_log("LIFF Bind Attempt: User=$lineUserId, Code=$code");
+        if (!fc_rate_limit($pdo, 'line-bind:' . $lineUserId, 5)) throw new InvalidArgumentException('綁定嘗試過多，請稍後再試。');
 
         if (!$code) {
             throw new Exception("請輸入綁定碼");
         }
         
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE line_bind_code = ? AND line_bind_code_expires_at > NOW()");
-        $stmt->execute([$code]);
+        $stmt = $pdo->prepare("UPDATE users SET line_user_id = ?, line_bind_code = NULL, line_bind_code_expires_at = NULL
+            WHERE line_bind_code = ? AND line_bind_code_expires_at > NOW() AND email_verified_at IS NOT NULL RETURNING id");
+        $stmt->execute([$lineUserId, $code]);
         $user = $stmt->fetch();
 
         if ($user) {
-            $update = $pdo->prepare("UPDATE users SET line_user_id = ?, line_bind_code = NULL, line_bind_code_expires_at = NULL WHERE id = ?");
-            $update->execute([$lineUserId, $user['id']]);
             echo json_encode(['success' => true, 'message' => '綁定成功']);
         } else {
             error_log("LIFF Bind Failed: Code not found or expired.");
@@ -101,7 +133,8 @@ try {
         
         if (!$type || $minutes <= 0) throw new Exception("資料不完整");
 
-        $result = fc_record_workout($pdo, (int)$user['id'], $date, $type, $minutes, (float)($user['weight'] ?? 0));
+        $requestKey = is_string($input['request_key'] ?? null) ? $input['request_key'] : null;
+        $result = fc_record_workout($pdo, (int)$user['id'], $date, $type, $minutes, null, $requestKey);
         
         echo json_encode([
             'success' => true,
@@ -130,5 +163,6 @@ try {
     }
 
 } catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    http_response_code($e instanceof PDOException ? 500 : 400);
+    echo json_encode(['success' => false, 'message' => $e instanceof PDOException ? '暫時無法完成操作，請稍後再試。' : $e->getMessage()]);
 }

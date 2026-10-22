@@ -4,12 +4,15 @@ const API_URL = 'submit.php';
 let currentUser = null;
 let isDemoMode = false;
 let globalTimeRange = '1d';
+let statsTimeRange = '1d';
 let bindPollInterval = null;
 let leaderboardPollInterval = null; // 排行榜即時更新 Timer
 let deferredPrompt = null; // PWA Install Prompt
 let csrfToken = '';
 const leaderboardRanges = ['1d', '1wk', '1m', '3m', 'total'];
 let leaderboardLoadSeq = 0;
+let statsLoadSeq = 0;
+let leaderboardAnimationTimer = null;
 
 // === PWA Install Logic ===
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -104,6 +107,7 @@ function initApp() {
         setupCoachInteraction();
         setupDateTimeDefaults();
         setupMobileNav();
+        fcSetupFeatures();
 
         console.log('✅ 應用程式設置完成');
     }, 200);
@@ -197,6 +201,7 @@ function showDashboard() {
     }
 
     setGlobalRange('1d');
+    fcLoadWorkouts(1);
 
     // Start Auto Refresh (Profile, Stats, Leaderboard)
     startAutoRefresh();
@@ -245,6 +250,10 @@ async function logout() {
     isDemoMode = false;
     currentUser = null;
     csrfToken = '';
+    leaderboardLoadSeq++;
+    statsLoadSeq++;
+    fcResetFeatures();
+    document.getElementById('chat-window').style.display = 'none';
 
     // 直接切換回登入頁面（不重新載入）
     showLogin();
@@ -285,6 +294,7 @@ function setupForms() {
 }
 
 function switchTab(tab) {
+    fcAccountView(tab);
     const loginFn = document.getElementById('login-form');
     const regFn = document.getElementById('register-form');
     const loginBtn = document.getElementById('tab-login');
@@ -375,7 +385,8 @@ async function handleLogin(e) {
             }
         } else {
             console.error('❌ 登入失敗:', json.message);
-            alert('登入失敗: ' + (json.message || '帳號或密碼錯誤'));
+            if (json.verification_required) fcAccountView('resend', email);
+            fcAuthMessage(json.message || '帳號或密碼錯誤');
         }
     } catch (err) {
         console.error('❌ 登入錯誤:', err);
@@ -412,6 +423,13 @@ async function handleRegister(e) {
     try {
         const json = await fetchPost('register', { display_name, email, password });
         console.log('📥 註冊回應:', json);
+
+        if (json.verification_required) {
+            fcAccountView('resend', email);
+            fcAuthMessage(json.message, !!json.email_sent);
+            form.reset();
+            return;
+        }
 
         if (json.success) {
             if (json.csrf_token) csrfToken = json.csrf_token;
@@ -470,12 +488,21 @@ async function handleAddWorkout(e) {
     }
 
     const datetime = `${datePart} ${timePart}:00`;
+    const payloadKey = JSON.stringify([datetime, type, minutes]);
+    if (form.dataset.pendingPayload !== payloadKey) {
+        form.dataset.pendingPayload = payloadKey;
+        form.dataset.requestKey = crypto.randomUUID();
+    }
+    const submitButton = form.querySelector('[type="submit"]');
+    if (submitButton.disabled) return;
+    submitButton.disabled = true;
 
     try {
         const json = await fetchPost('add_workout', {
             date: datetime,
             type,
-            minutes
+            minutes,
+            request_key: form.dataset.requestKey
         });
 
         if (json.success) {
@@ -489,6 +516,8 @@ async function handleAddWorkout(e) {
             }
 
             form.reset();
+            delete form.dataset.pendingPayload;
+            delete form.dataset.requestKey;
             // Fix: Explicitly reset the calculated value display to 0
             const calcVal = document.getElementById('calc-val');
             if (calcVal) calcVal.textContent = '0';
@@ -496,12 +525,17 @@ async function handleAddWorkout(e) {
             document.getElementById('calorie-display-area').classList.add('hidden');
             setupDateTimeDefaults();
             setGlobalRange(globalTimeRange);
+            if (globalTimeRange === 'total') fetchStats(statsTimeRange);
+            fcLoadWorkouts(1);
+            fcInvalidateReport();
         } else {
             alert('新增失敗: ' + (json.message || ''));
         }
     } catch (err) {
         console.error('新增運動錯誤:', err);
         alert('連線錯誤: ' + err.message);
+    } finally {
+        submitButton.disabled = false;
     }
 }
 
@@ -512,10 +546,12 @@ function setGlobalRange(range) {
 
     // Update active button state
     document.querySelectorAll('.g-time-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.range === range);
+        const activeRange = btn.closest('.leaderboard-time-switch') ? range : (range === 'total' ? statsTimeRange : range);
+        btn.classList.toggle('active', btn.dataset.range === activeRange);
     });
 
     if (range !== 'total') {
+        statsTimeRange = range;
         fetchStats(range);
     }
     loadLeaderboard({
@@ -533,6 +569,8 @@ function getLeaderboardDirection(previousRange, nextRange) {
 }
 
 async function fetchStats(range) {
+    const loadSeq = ++statsLoadSeq;
+    const owner = currentUser?.id;
     const charts = document.querySelectorAll('.chart-box canvas');
     charts.forEach(c => {
         c.style.transition = 'opacity 0.3s';
@@ -542,7 +580,9 @@ async function fetchStats(range) {
     try {
         const json = isDemoMode
             ? getDemoStats(range)
-            : await (await fetch(`${API_URL}?action=get_stats&range=${range}&t=${Date.now()}`, { credentials: 'same-origin' })).json();
+            : await fcGet('get_stats', { range });
+
+        if (loadSeq !== statsLoadSeq || owner !== currentUser?.id) return;
 
         if (!json.success) {
             console.error('Stats failed:', json.message);
@@ -557,8 +597,10 @@ async function fetchStats(range) {
     } catch (e) {
         console.error('Stats error:', e);
     } finally {
-        charts.forEach(c => c.style.opacity = '1');
-        updateChartDateLabel(range);
+        if (loadSeq === statsLoadSeq) {
+            charts.forEach(c => c.style.opacity = '1');
+            updateChartDateLabel(range);
+        }
     }
 }
 
@@ -831,6 +873,7 @@ function prefersReducedMotion() {
 }
 
 function setLeaderboardTransitionState(state, direction = 'forward') {
+    clearTimeout(leaderboardAnimationTimer);
     const card = document.querySelector('.leaderboard-card');
     const table = document.getElementById('leaderboard-table');
     if (!card || !table) return;
@@ -853,7 +896,7 @@ function setLeaderboardTransitionState(state, direction = 'forward') {
             direction === 'back' ? 'leaderboard-slide-back' : 'leaderboard-slide-forward',
             'leaderboard-table-in'
         );
-        window.setTimeout(() => table.classList.remove('leaderboard-table-in'), 360);
+        leaderboardAnimationTimer = window.setTimeout(() => table.classList.remove('leaderboard-table-in'), 600);
     }
 }
 
@@ -869,13 +912,15 @@ async function loadLeaderboard(options = {}) {
         setLeaderboardTransitionState('out', direction);
         await delay(140);
         if (loadSeq !== leaderboardLoadSeq) return;
+    } else {
+        setLeaderboardTransitionState('idle');
     }
 
     try {
         const range = globalTimeRange || '1m';
         const json = isDemoMode
             ? { success: true, range, data: [{ rank: 1, display_name: 'Demo Hero', total: range === 'total' ? 1800 : 180 }] }
-            : await (await fetch(`${API_URL}?action=get_leaderboard&range=${encodeURIComponent(range)}&t=${Date.now()}`, { credentials: 'same-origin' })).json();
+            : await fcGet('get_leaderboard', { range });
 
         if (loadSeq !== leaderboardLoadSeq) return;
 
@@ -1031,6 +1076,8 @@ async function postJson(action, data = {}) {
         method: 'POST',
         headers: authJsonHeaders(),
         credentials: 'same-origin',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(action === 'ai_coach' ? 45000 : 30000),
         body: JSON.stringify(data)
     });
 
@@ -1038,7 +1085,6 @@ async function postJson(action, data = {}) {
 
     try {
         const json = JSON.parse(text);
-        console.log(`📥 API 回應 (${action}):`, json);
         return json;
     } catch (e) {
         console.error('❌ API 回應不是 JSON:', text);
@@ -1590,15 +1636,16 @@ function startAutoRefresh() {
                 currentUser = json.data;
                 console.log('🔄 同步個人資料', currentUser);
                 updateProfileUI();
+            } else if (res.status === 401) {
+                fcExpireSession();
+                return;
             }
         } catch (e) { console.error('Auto-refresh User Error', e); }
 
         // 2. Refresh Stats (Charts)
         // Use globalTimeRange
         try {
-            if (globalTimeRange !== 'total') {
-                fetchStats(globalTimeRange || '1d');
-            }
+            fetchStats(statsTimeRange);
         } catch (e) { console.error('Auto-refresh Stats Error', e); }
 
         // 3. Refresh Leaderboard

@@ -50,8 +50,13 @@ try {
         require_once __DIR__ . '/workout.php';
     }
     
-    session_start();
+    require_once __DIR__ . '/auth.php';
+    require_once __DIR__ . '/reports.php';
+    fc_start_session();
+    fc_check_session($pdo);
     header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, private');
+    header('Referrer-Policy: no-referrer');
     
     // Check database connection
     if (!isset($pdo) || !$pdo) {
@@ -121,11 +126,26 @@ try {
         'update_profile',
         'update_avatar',
         'add_workout',
+        'update_workout',
+        'delete_workout',
+        'forgot_password',
+        'resend_verification',
+        'verify_email',
+        'reset_password',
         'generate_bind_code',
         'line_unbind',
         'ai_coach',
+        'clear_coach_history',
     ];
-    $csrfExemptActions = ['register', 'login'];
+    $csrfExemptActions = ['register', 'login', 'forgot_password', 'resend_verification', 'verify_email', 'reset_password'];
+
+    $privateActions = ['get_user_info', 'logout', 'update_profile', 'update_avatar', 'add_workout',
+        'update_workout', 'delete_workout', 'list_workouts', 'get_stats', 'get_report',
+        'generate_bind_code', 'line_unbind', 'ai_coach', 'clear_coach_history'];
+    if (in_array($action, $privateActions, true) && !isset($_SESSION['user_id'])) {
+        http_response_code(401);
+        sendResponse(['success' => false, 'message' => '登入已失效，請重新登入。']);
+    }
 
     if (in_array($action, $postActions, true)) {
         requirePost($action);
@@ -134,58 +154,12 @@ try {
         }
     }
     
-    // === Authentication Actions ===
-    if ($action === 'register') {
-        $email = trim($input['email'] ?? '');
-        $pass = $input['password'] ?? '';
-        $name = trim($input['display_name'] ?? 'User');
-        
-        $stmt = $pdo->prepare('SELECT id FROM users WHERE email = :email LIMIT 1');
-        $stmt->execute([':email' => $email]);
-        if ($stmt->fetch()) {
-            sendResponse(['success' => false, 'message' => '這個email已註冊過了']);
-        }
-        
-        $hash = password_hash($pass, PASSWORD_DEFAULT);
-        $stmt = $pdo->prepare(
-            'INSERT INTO users (email, password_hash, display_name) VALUES (:email, :hash, :name) RETURNING id'
-        );
-        
-        if ($stmt->execute([':email' => $email, ':hash' => $hash, ':name' => $name])) {
-            $newUser = $stmt->fetch(PDO::FETCH_ASSOC);
-            session_regenerate_id(true);
-            $_SESSION['user_id'] = $newUser['id'];
-            unset($_SESSION['csrf_token']);
-            sendResponse(['success' => true, 'message' => 'Registration successful', 'csrf_token' => csrfToken()]);
-        }
-        
-        sendResponse(['success' => false, 'message' => 'Registration failed']);
-    }
-    
-    if ($action === 'login') {
-        $email = trim($input['email'] ?? '');
-        $pass = $input['password'] ?? '';
-        
-        if ($email === '' || $pass === '') {
-            sendResponse(['success' => false, 'message' => 'Please enter email and password']);
-        }
-        
-        $stmt = $pdo->prepare('SELECT id, password_hash, display_name FROM users WHERE email = :email LIMIT 1');
-        $stmt->execute([':email' => $email]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (!$user || !password_verify($pass, $user['password_hash'])) {
-            sendResponse(['success' => false, 'message' => 'Invalid email or password']);
-        }
-        
-        session_regenerate_id(true);
-        $_SESSION['user_id'] = $user['id'];
-        unset($_SESSION['csrf_token']);
-        sendResponse(['success' => true, 'message' => 'Login successful', 'csrf_token' => csrfToken()]);
-    }
-    
+    fc_handle_account_action($pdo, (string)$action, $input);
+
     if ($action === 'logout') {
+        $_SESSION = [];
         session_destroy();
+        setcookie(session_name(), '', ['expires' => time() - 3600, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
         sendResponse(['success' => true, 'message' => 'Logged out']);
     }
     
@@ -241,6 +215,36 @@ try {
         sendResponse(['success' => true, 'message' => 'Avatar updated']);
     }
     
+    if (in_array($action, ['list_workouts', 'get_report', 'update_workout', 'delete_workout'], true)) {
+        if (!isset($_SESSION['user_id'])) {
+            http_response_code(401);
+            sendResponse(['success' => false, 'message' => '登入已失效，請重新登入。']);
+        }
+        $userId = (int)$_SESSION['user_id'];
+        if ($action === 'get_report') {
+            $period = (string)($_GET['period'] ?? 'week');
+            sendResponse(['success' => true, 'report' => fc_build_report($pdo, $userId, $period)]);
+        }
+        if ($action === 'list_workouts') {
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $count = $pdo->prepare('SELECT COUNT(*) FROM workouts WHERE user_id = ?');
+            $count->execute([$userId]);
+            $total = (int)$count->fetchColumn();
+            $page = min($page, max(1, (int)ceil($total / 20)));
+            $stmt = $pdo->prepare("SELECT id, to_char(date AT TIME ZONE 'Asia/Taipei', 'YYYY-MM-DD HH24:MI:SS') AS date,
+                type, minutes, calories, weight_kg, revision FROM workouts WHERE user_id = :uid
+                ORDER BY date DESC, id DESC LIMIT 20 OFFSET :offset");
+            $stmt->bindValue(':uid', $userId, PDO::PARAM_INT);
+            $stmt->bindValue(':offset', ($page - 1) * 20, PDO::PARAM_INT);
+            $stmt->execute();
+            sendResponse(['success' => true, 'data' => $stmt->fetchAll(), 'page' => $page,
+                'total' => $total, 'pages' => max(1, (int)ceil($total / 20))]);
+        }
+        session_write_close();
+        $result = fc_mutate_workout($pdo, $userId, $action === 'update_workout' ? 'update' : 'delete', $input);
+        sendResponse(['success' => true] + $result);
+    }
+
     // === Workout Actions ===
     if ($action === 'add_workout') {
         if (!isset($_SESSION['user_id'])) {
@@ -259,10 +263,14 @@ try {
             throw new Exception('Workout helper not available');
         }
 
-        $result = fc_record_workout($pdo, (int)$_SESSION['user_id'], $date, $type, $minutes);
+        $userId = (int)$_SESSION['user_id'];
+        session_write_close();
+        $requestKey = is_string($input['request_key'] ?? null) ? $input['request_key'] : null;
+        $result = fc_record_workout($pdo, $userId, $date, $type, $minutes, null, $requestKey);
         sendResponse([
             'success' => true,
             'message' => 'Workout added',
+            'id' => $result['id'],
             'calories' => $result['calories'],
             'achievements' => $result['achievements'],
         ]);
@@ -565,6 +573,15 @@ try {
     }
     
     // === AI Coach Action ===
+    if ($action === 'clear_coach_history') {
+        if (!isset($_SESSION['user_id'])) {
+            http_response_code(401);
+            sendResponse(['success' => false, 'message' => '請重新登入。']);
+        }
+        unset($_SESSION['coach_history']);
+        $_SESSION['coach_epoch'] = (int)($_SESSION['coach_epoch'] ?? 0) + 1;
+        sendResponse(['success' => true]);
+    }
     if ($action === 'ai_coach') {
         if (!$coachAvailable) {
             sendResponse(['success' => false, 'message' => 'AI Coach not available']);
@@ -579,18 +596,56 @@ try {
             sendResponse(['success' => false, 'message' => 'Message cannot be empty']);
         }
         
+        if (mb_strlen($message) > 1200) {
+            sendResponse(['success' => false, 'message' => '每則訊息最多 1200 字。']);
+        }
+        $period = (string)($input['period'] ?? 'week');
+        if (!in_array($period, ['day', 'week'], true)) {
+            sendResponse(['success' => false, 'message' => '不支援的報告範圍。']);
+        }
+        $userId = (int)$_SESSION['user_id'];
+        $authVersion = (int)$_SESSION['auth_version'];
+        $history = $_SESSION['coach_history'] ?? [];
+        $epoch = (int)($_SESSION['coach_epoch'] ?? 0);
+        session_write_close();
         try {
-            // Fix: call existing function askCoachFromDb without $pdo
-            $response = askCoachFromDb($_SESSION['user_id'], $message);
-            sendResponse(['success' => true, 'response' => $response]);
-        } catch (Exception $e) {
-            sendResponse(['success' => false, 'message' => 'AI Coach error: ' . $e->getMessage()]);
+            $result = askCoachFromDb($pdo, $userId, $message, $history, $period);
+            fc_start_session();
+            fc_check_session($pdo);
+            if (($_SESSION['user_id'] ?? null) !== $userId || (int)($_SESSION['auth_version'] ?? 0) !== $authVersion) {
+                http_response_code(401);
+                sendResponse(['success' => false, 'message' => '登入已失效，請重新登入。']);
+            }
+            $history[] = ['role' => 'user', 'text' => $message];
+            $history[] = ['role' => 'model', 'text' => $result['response']];
+            if ((int)($_SESSION['coach_epoch'] ?? 0) === $epoch) $_SESSION['coach_history'] = array_slice($history, -6);
+            sendResponse(['success' => true] + $result);
+        } catch (PDOException $e) {
+            throw $e;
+        } catch (RuntimeException $e) {
+            http_response_code(502);
+            sendResponse(['success' => false, 'message' => $e->getMessage()]);
         }
     }
     
     // Unknown action
     sendResponse(['success' => false, 'message' => 'Unknown action: ' . $action]);
     
+} catch (FcWorkoutConflict $e) {
+    ob_end_clean();
+    http_response_code(409);
+    echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    exit;
+} catch (FcWorkoutNotFound $e) {
+    ob_end_clean();
+    http_response_code(404);
+    echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    exit;
+} catch (InvalidArgumentException $e) {
+    ob_end_clean();
+    http_response_code(400);
+    echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    exit;
 } catch (PDOException $e) {
     ob_end_clean();
     http_response_code(500);

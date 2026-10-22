@@ -15,6 +15,14 @@
 *.key
 credentials*.json
 service-account*.json
+secrets/
+.secrets/
+
+# Private machine-specific Compose overrides; share secret-free compose.yaml instead.
+compose.override.yaml
+compose.override.yml
+docker-compose.override.yaml
+docker-compose.override.yml
 
 # =========================
 # Database backups
@@ -24,6 +32,10 @@ service-account*.json
 *.sql.gz
 backups/
 **/backups/
+# Local bind mounts only. Never ignore db/schema.sql or db/migrations/.
+/pgdata/
+/postgres-data/
+/.volumes/
 
 # =========================
 # Runtime / Logs
@@ -52,4 +64,9 @@ desktop.ini
 # =========================
 db_test.php
 test_email.php
-/docs
+db/migrations/
+db/migrate.php
+node_modules/
+# Local integration-test dependencies and generated evidence.
+.test-runtime/
+test-results/

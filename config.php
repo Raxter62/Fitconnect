@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
+date_default_timezone_set('Asia/Taipei');
 
 function fc_is_debug_env(): bool {
     $env = strtolower((string)(getenv('APP_ENV') ?: ''));
@@ -13,6 +14,7 @@ function fc_is_debug_env(): bool {
 function fc_json_fatal(string $msg, ?string $detail = null): void {
     http_response_code(500);
     header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, private');
     $payload = [
         'success' => false,
         'message' => $msg,
@@ -21,7 +23,7 @@ function fc_json_fatal(string $msg, ?string $detail = null): void {
         $payload['error'] = $detail;
     }
     echo json_encode($payload, JSON_UNESCAPED_UNICODE);
-    exit;
+    exit(PHP_SAPI === 'cli' ? 1 : 0);
 }
 
 function fc_env_str(string $key): string {
@@ -29,7 +31,7 @@ function fc_env_str(string $key): string {
     if ($v === false) return '';
     $v = trim($v);
 
-    // 去掉前後引號（Railway UI 有時候貼上會不小心帶到）
+    // 移除貼上環境變數時可能一起帶入的外層引號。
     if ($v !== '' && (
         ($v[0] === '"' && substr($v, -1) === '"') ||
         ($v[0] === "'" && substr($v, -1) === "'")
@@ -42,17 +44,17 @@ function fc_env_str(string $key): string {
 // ---- 1) 讀 DATABASE_URL ----
 $databaseUrl = fc_env_str('DATABASE_URL');
 if ($databaseUrl === '') {
-    fc_json_fatal('Missing DATABASE_URL', 'Please set DATABASE_URL to Supabase/Neon Postgres connection string.');
+    fc_json_fatal('Missing DATABASE_URL', 'Set DATABASE_URL to your PostgreSQL connection string in the PHP service environment.');
 }
 
 // 防呆：若你不小心還放著占位字
 if (stripos($databaseUrl, '[YOUR-PASSWORD]') !== false || stripos($databaseUrl, 'YOUR_PASSWORD') !== false) {
-    fc_json_fatal('DATABASE_URL still contains password placeholder', 'Replace [YOUR-PASSWORD] or set SUPABASE_DB_PASSWORD in Railway Variables.');
+    fc_json_fatal('DATABASE_URL still contains password placeholder', 'Replace the password placeholder in the PHP service environment.');
 }
 
 $dbConfig = parse_url($databaseUrl);
 if ($dbConfig === false || !is_array($dbConfig)) {
-    fc_json_fatal('Invalid DATABASE_URL (parse_url failed)', 'Check for quotes/spaces/newlines in Railway Variables.');
+    fc_json_fatal('Invalid DATABASE_URL (parse_url failed)', 'Check DATABASE_URL in the PHP service environment for quotes, spaces or newlines.');
 }
 
 $scheme = strtolower((string)($dbConfig['scheme'] ?? ''));
@@ -65,9 +67,8 @@ $pass   = isset($dbConfig['pass']) ? rawurldecode((string)$dbConfig['pass']) : '
 $dbname = isset($dbConfig['path']) ? rawurldecode(ltrim((string)$dbConfig['path'], '/')) : '';
 $query  = (string)($dbConfig['query'] ?? '');
 
-// ---- 2) Supabase 密碼覆蓋（避開 URL 特殊字元/encoding 地雷）----
-$passOverride = fc_env_str('SUPABASE_DB_PASSWORD');
-if ($passOverride === '') $passOverride = fc_env_str('DB_PASSWORD');
+// ---- 2) 可選的原始密碼覆蓋，避免 URL 特殊字元編碼問題 ----
+$passOverride = fc_env_str('DB_PASSWORD');
 if ($passOverride !== '') {
     $pass = $passOverride; // 用原始密碼，不做 urldecode
 }
@@ -81,11 +82,12 @@ if ($host === '' || $user === '' || $dbname === '') {
 }
 if ($port === 0) $port = 5432;
 
-// ---- 3) DSN 組裝（強制 sslmode=require，避免某些環境握手不一致）----
+// ---- 3) DSN 組裝：沿用連線字串的 SSL 設定，未指定時要求 TLS ----
 parse_str($query, $q);
 if (!isset($q['sslmode']) || $q['sslmode'] === '') {
     $q['sslmode'] = 'require';
 }
+$q['connect_timeout'] = '8';
 
 $extraDsn = '';
 if (!empty($q)) {
@@ -110,112 +112,14 @@ try {
     fc_json_fatal('DB connection failed', $e->getMessage());
 }
 
-// ---- 5) 建表----
-try {
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            email TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            display_name TEXT,
-            avatar_id INTEGER NOT NULL DEFAULT 1,
-            line_user_id TEXT UNIQUE,
-            line_bind_code VARCHAR(10),
-            line_bind_code_expires_at TIMESTAMPTZ,
-            height NUMERIC(5,1),
-            weight NUMERIC(5,1),
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        );
-    ");
-
-    $pdo->exec("
-        ALTER TABLE users
-        ADD COLUMN IF NOT EXISTS avatar_id INTEGER NOT NULL DEFAULT 1;
-    ");
-
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS workouts (
-            id BIGSERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            date TIMESTAMPTZ NOT NULL,
-            type TEXT NOT NULL,
-            minutes INTEGER NOT NULL,
-            calories INTEGER NOT NULL,
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        );
-    ");
-
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS user_totals (
-            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-            total_calories BIGINT NOT NULL DEFAULT 0
-        );
-    ");
-
-    $pdo->exec("
-        INSERT INTO user_totals (user_id, total_calories)
-        SELECT user_id, COALESCE(SUM(calories), 0)::BIGINT
-        FROM workouts
-        GROUP BY user_id
-        ON CONFLICT (user_id)
-        DO UPDATE SET total_calories = EXCLUDED.total_calories;
-    ");
-
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS leaderboard_snapshots (
-            id BIGSERIAL PRIMARY KEY,
-            date DATE NOT NULL,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            rank INTEGER NOT NULL,
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        );
-    ");
-
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS email_notifications (
-            id BIGSERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            type VARCHAR(50) NOT NULL,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            sent_at TIMESTAMPTZ DEFAULT NULL
-        );
-    ");
-
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_workouts_user_date ON workouts(user_id, date);");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_leaderboard_date ON leaderboard_snapshots(date);");
-    $duplicateLineIds = (int)$pdo->query("
-        SELECT COUNT(*)
-        FROM (
-            SELECT line_user_id
-            FROM users
-            WHERE line_user_id IS NOT NULL
-            GROUP BY line_user_id
-            HAVING COUNT(*) > 1
-        ) dup
-    ")->fetchColumn();
-    if ($duplicateLineIds === 0) {
-        $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_line_user_id_unique ON users(line_user_id) WHERE line_user_id IS NOT NULL;");
-    } else {
-        error_log('Skipped idx_users_line_user_id_unique because duplicate line_user_id values exist.');
-    }
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_users_line_bind_code ON users(line_bind_code);");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_email_notifications_user_id ON email_notifications(user_id);");
-    
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS achievements (
-            id BIGSERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            type VARCHAR(50) NOT NULL,
-            unlocked_at TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(user_id, type)
-        );
-    ");
-} catch (PDOException $e) {
-    fc_json_fatal('DB schema init failed', $e->getMessage());
-}
+// Schema changes run explicitly through: php db/migrate.php.
+$pdo->exec("SET TIME ZONE 'Asia/Taipei'");
+$pdo->exec("SET statement_timeout = '15s'");
 
 // ---- 6) 其他金鑰（保持原功能）----
-define('OPENAI_API_KEY',      getenv('OPENAI_API_KEY') ?: '');
+define('GEMINI_API_KEY',      fc_env_str('GEMINI_API_KEY'));
+define('GEMINI_MODEL',        fc_env_str('GEMINI_MODEL') ?: 'gemini-3.5-flash-lite');
+define('APP_BASE_URL',        rtrim(fc_env_str('APP_BASE_URL'), '/'));
 define('LINE_CHANNEL_SECRET', getenv('LINE_CHANNEL_SECRET') ?: '');
 define('LINE_CHANNEL_ACCESS', getenv('LINE_CHANNEL_ACCESS') ?: '');
 define('LINE_CHANNEL_TOKEN',  getenv('LINE_CHANNEL_TOKEN') ?: '');

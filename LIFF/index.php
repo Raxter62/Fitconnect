@@ -94,6 +94,7 @@
         const API_URL = 'api.php';
         let lineUserId = '';
         let liffId = ''; 
+        let workoutRequest = null;
         
         async function init() {
             try {
@@ -105,8 +106,7 @@
                     return;
                 }
 
-                const profile = await liff.getProfile();
-                lineUserId = profile.userId;
+                if (!liff.getIDToken()) throw new Error('需要 LINE openid 權限，請聯絡管理員。');
                 document.getElementById('loading').classList.add('hidden');
 
                 // Routing
@@ -209,7 +209,9 @@
             // Combine to YYYY-MM-DD HH:MM:00
             const fullDate = `${datePart} ${timePart}:00`;
 
-            const res = await apiPost('add_workout', { date: fullDate, type, minutes });
+            const payload = JSON.stringify([fullDate, type, minutes]);
+            if (!workoutRequest || workoutRequest.payload !== payload) workoutRequest = { payload, key: crypto.randomUUID() };
+            const res = await apiPost('add_workout', { date: fullDate, type, minutes, request_key: workoutRequest.key });
             if (res.success) {
                 alert(`紀錄已儲存！消耗卡路里: ${res.calories}`);
                 liff.closeWindow();
@@ -236,7 +238,7 @@
 
         async function apiPost(action, data) {
             data.action = action;
-            data.lineUserId = lineUserId;
+            data.idToken = liff.getIDToken();
             const res = await fetch(API_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

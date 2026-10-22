@@ -33,6 +33,8 @@ function sendResendEmail(string $to, string $subject, string $htmlBody, ?PDO $pd
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
     curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 12);
     
     $result = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -52,7 +54,7 @@ function sendResendEmail(string $to, string $subject, string $htmlBody, ?PDO $pd
     if ($success) {
         return true;
     } else {
-        error_log("Resend Email Failed: $result");
+        error_log("Resend Email Failed; HTTP $httpCode");
         return false;
     }
 }
@@ -61,7 +63,7 @@ function sendResendEmail(string $to, string $subject, string $htmlBody, ?PDO $pd
  * Check and Unlock Achievements
  * Triggered after detailed workout insertion.
  */
-function checkAchievements(PDO $pdo, int $userId): array {
+function checkAchievements(PDO $pdo, int $userId, bool $notify = true): array {
     $newlyUnlocked = [];
 
     // 1. Get User's current stats (Totals) and streaks
@@ -139,9 +141,12 @@ function checkAchievements(PDO $pdo, int $userId): array {
     $stmt->execute([$userId]);
     $existing = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
-    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-    $protocol = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? "https" : "http";
-    $baseUrl = "$protocol://$host/public/image/Achievement";
+    $eligible = array_column(array_filter($rules, static fn(array $rule): bool => $rule['cond']()), 'id');
+    foreach ($rules as $rule) {
+        if (!in_array($rule['id'], $eligible, true)) {
+            $pdo->prepare('DELETE FROM achievements WHERE user_id = ? AND type = ?')->execute([$userId, $rule['id']]);
+        }
+    }
 
     foreach ($rules as $rule) {
         if (!in_array($rule['id'], $existing) && $rule['cond']()) {
@@ -159,28 +164,34 @@ function checkAchievements(PDO $pdo, int $userId): array {
             // Return full info for frontend notification
             $newlyUnlocked[] = ['title' => $rule['title'], 'img' => $rule['img']];
 
-            // Send Email
-            $userEmail = getUserEmail($pdo, $userId);
-            if ($userEmail) {
-                $imgUrl = "$baseUrl/{$rule['img']}";
-                $html = "
-                    <h1>恭喜！您已解鎖成就：{$rule['title']}</h1>
-                    <p>繼續保持運動的好習慣！</p>
-                    <img src='$imgUrl' style='max-width: 300px; border-radius: 10px; margin-top: 20px;' alt='Achievement'>
-                ";
-                sendResendEmail($userEmail, "【FitConnect】成就解鎖通知", $html, $pdo, $userId, 'achievement');
-            }
         }
     }
 
+    if ($notify) fc_notify_achievements($pdo, $userId, $newlyUnlocked);
     return $newlyUnlocked;
+}
+
+function fc_notify_achievements(PDO $pdo, int $userId, array $achievements): void {
+    if (!$achievements) return;
+    $email = getUserEmail($pdo, $userId);
+    if (!$email) return;
+    foreach ($achievements as $achievement) {
+        $title = htmlspecialchars($achievement['title'], ENT_QUOTES, 'UTF-8');
+        $html = "<h1>恭喜！您已解鎖成就：{$title}</h1><p>繼續保持運動的好習慣！</p>";
+        $base = defined('APP_BASE_URL') ? APP_BASE_URL : '';
+        if ($base !== '') {
+            $img = htmlspecialchars($base . '/public/image/Achievement/' . rawurlencode($achievement['img']), ENT_QUOTES, 'UTF-8');
+            $html .= "<img src=\"{$img}\" alt=\"Achievement\" style=\"max-width:300px\">";
+        }
+        sendResendEmail($email, '【FitConnect】成就解鎖通知', $html, $pdo, $userId, 'achievement');
+    }
 }
 
 /**
  * Get User Email Helper
  */
 function getUserEmail(PDO $pdo, int $userId): ?string {
-    $stmt = $pdo->prepare("SELECT email FROM users WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT email FROM users WHERE id = ? AND email_verified_at IS NOT NULL");
     $stmt->execute([$userId]);
     return $stmt->fetchColumn() ?: null;
 }
@@ -202,7 +213,8 @@ function logLeaderboardSnapshot(PDO $pdo): void {
         SELECT u.id, t.total_calories as total_cal
         FROM users u 
         JOIN user_totals t ON u.id = t.user_id 
-        ORDER BY total_cal DESC
+        WHERE t.total_calories > 0
+        ORDER BY total_cal DESC, u.id ASC
     ";
     
     $stmt = $pdo->prepare($sql);
@@ -234,7 +246,8 @@ function checkLeaderboardChanges(PDO $pdo, array $preUpdateRanks): void {
         SELECT u.id, t.total_calories as total_cal
         FROM users u 
         JOIN user_totals t ON u.id = t.user_id 
-        ORDER BY total_cal DESC
+        WHERE t.total_calories > 0
+        ORDER BY total_cal DESC, u.id ASC
     ";
     $stmt = $pdo->prepare($sql);
     $stmt->execute();
@@ -279,7 +292,8 @@ function getCurrentRanks(PDO $pdo): array {
         SELECT u.id, t.total_calories as total_cal
         FROM users u 
         JOIN user_totals t ON u.id = t.user_id 
-        ORDER BY total_cal DESC
+        WHERE t.total_calories > 0
+        ORDER BY total_cal DESC, u.id ASC
     ";
     $stmt = $pdo->prepare($sql);
     $stmt->execute();

@@ -3,7 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="referrer" content="no-referrer">
     <title>FitConnect 運動平台</title>
     <link rel="icon" href="public/image/logo/logo.png">
     <link rel="manifest" href="manifest.json">
@@ -52,6 +53,10 @@
                     <label class="form-label">密碼</label>
                     <input type="password" id="login-password" class="form-control" name="password" required>
                     <button type="submit" class="btn-primary" style="width: 100%; margin-top: 0.5rem;">登入</button>
+                    <div class="auth-actions">
+                        <button type="button" class="text-action" id="open-forgot">忘記密碼</button>
+                        <button type="button" class="text-action" id="open-resend">重寄驗證信</button>
+                    </div>
                     <!-- demo
                     <p style="text-align: center; margin-top: 1rem; cursor: pointer; color: #999; font-size: 0.9rem;"
                         onclick="demoLogin()">
@@ -66,11 +71,40 @@
                     <label class="form-label">Email</label>
                     <input type="email" id="register-email" class="form-control" name="email" required>
                     <label class="form-label">密碼</label>
-                    <input type="password" id="register-password" class="form-control" name="password" required>
+                    <input type="password" id="register-password" class="form-control" name="password" minlength="8" autocomplete="new-password" required>
+                    <p class="field-note">密碼至少 8 個字元。</p>
                     <button type="submit" class="btn-primary" style="width: 100%; margin-top: 0.5rem;">註冊</button>
                 </form>
+                <form id="forgot-form" class="hidden account-flow">
+                    <h2>忘記密碼</h2>
+                    <label for="forgot-email" class="form-label">Email</label>
+                    <input type="email" id="forgot-email" class="form-control" autocomplete="email" required>
+                    <button type="submit" class="btn-primary">寄送重設連結</button>
+                    <button type="button" class="text-action account-back">返回登入</button>
+                </form>
+                <form id="resend-form" class="hidden account-flow">
+                    <h2>驗證您的 Email</h2>
+                    <label for="resend-email" class="form-label">Email</label>
+                    <input type="email" id="resend-email" class="form-control" autocomplete="email" required>
+                    <button type="submit" class="btn-primary">重寄驗證信</button>
+                    <button type="button" class="text-action account-back">返回登入</button>
+                </form>
+                <form id="verify-form" class="hidden account-flow">
+                    <h2>Email 驗證</h2>
+                    <button type="submit" class="btn-primary">確認驗證 Email</button>
+                    <button type="button" class="text-action account-back">返回登入</button>
+                </form>
+                <form id="reset-form" class="hidden account-flow">
+                    <h2>設定新密碼</h2>
+                    <label for="reset-password" class="form-label">新密碼</label>
+                    <input type="password" id="reset-password" class="form-control" minlength="8" autocomplete="new-password" required>
+                    <label for="reset-confirm" class="form-label">確認新密碼</label>
+                    <input type="password" id="reset-confirm" class="form-control" minlength="8" autocomplete="new-password" required>
+                    <button type="submit" class="btn-primary">更新密碼</button>
+                    <button type="button" class="text-action account-back">返回登入</button>
+                </form>
             </div>
-            <div id="auth-msg" style="text-align: center; margin-top: 0.5rem; color: red;"></div>
+            <div id="auth-msg" role="status" aria-live="polite"></div>
         </div>
     </div>
 
@@ -91,6 +125,7 @@
                 </button>
                 <div class="nav-links">
                     <a href="#section-hero" class="active">紀錄</a>
+                    <a href="#section-history">歷史紀錄</a>
                     <a href="#section-charts">分析</a>
                     <a href="#section-leaderboard">排行榜</a>
                     <a href="#line-bind-section">綁定</a>
@@ -157,6 +192,27 @@
                     <input type="hidden" name="calories" id="input-calories">
                     <button type="submit" class="btn-primary" style="width: 100%; margin-top: 20px;">新增紀錄</button>
                 </form>
+            </div>
+        </section>
+
+        <section id="section-history" class="workout-history-band">
+            <div class="container">
+                <div class="history-heading">
+                    <h2>運動紀錄</h2>
+                    <button type="button" class="icon-button" id="history-refresh" title="重新整理紀錄" aria-label="重新整理紀錄"><i data-lucide="refresh-cw"></i></button>
+                </div>
+                <p id="history-status" role="status" aria-live="polite"></p>
+                <div class="history-table-wrap">
+                    <table class="history-table">
+                        <thead><tr><th>日期與時間</th><th>運動</th><th>分鐘</th><th>估計熱量</th><th>操作</th></tr></thead>
+                        <tbody id="workout-history-body"></tbody>
+                    </table>
+                </div>
+                <div class="history-pagination">
+                    <button type="button" class="icon-button" id="history-prev" aria-label="上一頁" title="上一頁"><i data-lucide="chevron-left"></i></button>
+                    <span id="history-page" aria-live="polite">1 / 1</span>
+                    <button type="button" class="icon-button" id="history-next" aria-label="下一頁" title="下一頁"><i data-lucide="chevron-right"></i></button>
+                </div>
             </div>
         </section>
 
@@ -365,18 +421,40 @@
         <div id="chat-window">
             <div class="chat-header">
                 <strong>AI 教練</strong>
+                <div class="chat-header-actions">
+                    <button type="button" class="icon-button" id="chat-clear" aria-label="清除對話" title="清除對話"><i data-lucide="rotate-ccw"></i></button>
+                    <button type="button" class="icon-button" id="chat-close" aria-label="關閉聊天室" title="關閉聊天室"><i data-lucide="x"></i></button>
+                </div>
             </div>
             <div id="chat-messages">
-                <div class="chat-msg ai">嗨！我是你的專屬教練，可以分析您最近的運動量與給您建議</div>
+                <div class="chat-msg ai">嗨！可以先查看個人週報或當日運動分析。AI 建議僅供參考；提問會將運動摘要與最近對話傳送至 Google。</div>
+            </div>
+            <div class="chat-shortcuts" aria-label="快捷訊息">
+                <button type="button" data-report="week">個人週報</button>
+                <button type="button" data-report="day">當日運動分析</button>
             </div>
             <div class="chat-input-area">
-                <input type="text" id="chat-input" class="form-control" placeholder="問我...">
-                <button onclick="sendChatMessage()">➤</button>
+                <input type="text" id="chat-input" class="form-control" placeholder="問我..." maxlength="1200" aria-label="傳送訊息給教練">
+                <button id="chat-send" onclick="sendChatMessage()" aria-label="傳送訊息" title="傳送訊息"><i data-lucide="send"></i></button>
             </div>
         </div>
 
+        <dialog id="workout-dialog" class="workout-dialog" aria-labelledby="workout-dialog-title">
+            <form id="edit-workout-form">
+                <div class="dialog-heading"><h2 id="workout-dialog-title">修改運動紀錄</h2><button type="button" id="edit-close" class="icon-button" aria-label="關閉" title="關閉"><i data-lucide="x"></i></button></div>
+                <div class="edit-datetime"><div><label for="edit-date" class="form-label">日期</label><input id="edit-date" type="date" class="form-control" required></div><div><label for="edit-time" class="form-label">時間</label><input id="edit-time" type="time" step="1" class="form-control" required></div></div>
+                <label for="edit-type" class="form-label">種類</label>
+                <select id="edit-type" class="form-control"><option>跑步</option><option>重訓</option><option>腳踏車</option><option>游泳</option><option>瑜珈</option><option>其他</option></select>
+                <label for="edit-minutes" class="form-label">分鐘</label><input id="edit-minutes" type="number" min="1" max="1440" class="form-control" required>
+                <p class="field-note" id="edit-weight-note"></p><p id="edit-error" role="status"></p>
+                <button type="submit" class="btn-primary">儲存修改</button>
+            </form>
+        </dialog>
+
 
         <script src="public/js/main.js"></script>
+        <script src="public/vendor/lucide.min.js"></script>
+        <script src="public/js/features.js"></script>
 
         <script src="public/js/bg-effects.js"></script>
         <script src="public/js/ai_chat.js"></script>

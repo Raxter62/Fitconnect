@@ -2,7 +2,7 @@
 
 ## 1. 系統架構圖 (System Architecture)
 
-本專案採用前後端分離的概念，但部署於單一 Railway 服務（PHP/Apache）。
+本專案由瀏覽器/PWA 呼叫 PHP API。PHP/Apache 與 PostgreSQL 部署在自己的 mini PC，由 Docker Compose 管理；連線與金鑰從 PHP 服務的環境變數取得，不依賴雲端部署或代管資料庫平台。
 
 ```mermaid
 ---
@@ -23,15 +23,15 @@ flowchart TB
         CoachPHP["LLM/coach.php (AI Logic)"]
         Config["config.php (Env Vars)"]
   end
- subgraph Backend["Backend (Railway / Apache + PHP)"]
+ subgraph Backend["Self-hosted mini PC (Docker Compose)"]
         SubmitPHP["submit.php (Main API Gateway)"]
         LineWebhook["linebot_webhook.php (LINE Bot)"]
+        Postgres["PostgreSQL (persistent volume)"]
         Services
   end
  subgraph External["External Services"]
-        Supabase["🗄️ Supabase (PostgreSQL)"]
         ResendAPI["📧 Resend API (Email)"]
-        OpenAI["🧠 LLM API (AI Coach)"]
+        Gemini["🧠 Gemini API (AI Coach)"]
         LinePlatform["🟢 LINE Platform"]
   end
     UserMobile["📱 User (Mobile/PWA)"] --> Index
@@ -42,10 +42,10 @@ flowchart TB
     SW -.-> Index
     SubmitPHP --> Config & MailPHP & CoachPHP
     LineWebhook --> Config & CoachPHP
-    SubmitPHP -- PDO/SQL --> Supabase
-    LineWebhook -- PDO/SQL --> Supabase
+    SubmitPHP -- PDO/SQL --> Postgres
+    LineWebhook -- PDO/SQL --> Postgres
     MailPHP -- API Request --> ResendAPI
-    CoachPHP -- API Request --> OpenAI
+    CoachPHP -- API Request --> Gemini
     LinePlatform -- Webhook POST --> LineWebhook
     LineWebhook -- Reply API --> LinePlatform
     LineUser["💬 LINE App User"] --> LinePlatform
@@ -68,7 +68,7 @@ sequenceDiagram
     participant U as User
     participant FE as Frontend (main.js)
     participant API as submit.php
-    participant DB as Supabase
+    participant DB as PostgreSQL
 
     Note over U, FE: 註冊流程
     U->>FE: 輸入 Email, 密碼, 暱稱
@@ -80,9 +80,13 @@ sequenceDiagram
     else Email 可用
         API->>API: Hash Password
         API->>DB: INSERT users
-        API->>API: Set $_SESSION['user_id']
-        API-->>FE: Return Success (Auto Login)
-        FE->>U: 跳轉至主控台 (Dashboard)
+        API->>DB: 儲存一次性驗證 Token 雜湊
+        API-->>U: 經 Resend 寄送 Email 驗證信
+        API-->>FE: Return verification_required
+        U->>FE: 開啟郵件連結並確認驗證
+        FE->>API: POST ?action=verify_email
+        API->>DB: 驗證並消耗 Token，標記 Email 已驗證
+        FE-->>U: 顯示驗證結果，返回登入
     end
 
     Note over U, FE: 登入流程
@@ -90,7 +94,7 @@ sequenceDiagram
     FE->>API: POST ?action=login
     API->>DB: SELECT user by Email
     API->>API: Verify Password Hash
-    alt 驗證成功
+    alt 密碼正確且 Email 已驗證
         API->>API: Set $_SESSION['user_id']
         API-->>FE: Return Success + CSRF Token
         FE->>API: GET ?action=get_user_info
@@ -110,13 +114,13 @@ sequenceDiagram
     participant FE as Frontend
     participant API as submit.php
     participant AI as LLM/Coach
-    participant DB as Supabase
+    participant DB as PostgreSQL
 
     Note over U, DB: 新增運動紀錄
     U->>FE: 填寫運動資料 (時間/種類)
     FE->>API: POST ?action=add_workout
-    API->>DB: INSERT workout_logs
-    API->>DB: UPDATE user_totals (Accumulate)
+    API->>DB: Transaction: INSERT workouts
+    API->>DB: Recalculate user_totals and achievement rules, then commit
     API-->>FE: Return Success
     FE->>U: 更新圖表 & 排行榜
 
@@ -140,7 +144,7 @@ sequenceDiagram
     participant API as submit.php
     participant LB as LineWebhook
     participant LINE as LINE App
-    participant DB as Supabase
+    participant DB as PostgreSQL
 
     U->>FE: 點擊 "產生綁定碼"
     FE->>API: POST ?action=generate_bind_code

@@ -3,7 +3,7 @@
 
 // 每次更新前端資源（main.js / css / html）都要更新版本號，讓瀏覽器抓新檔。
 // 這不會改變任何功能，只是讓瀏覽器知道要更新快取。
-const CACHE_VERSION = 'v7-2026-08-12-ai-coach-csrf-retry';
+const CACHE_VERSION = 'v9-2026-10-22-coach-accounts-history';
 const CACHE_NAME = `fitconnect-${CACHE_VERSION}`;
 
 const ASSETS_TO_CACHE = [
@@ -12,6 +12,8 @@ const ASSETS_TO_CACHE = [
     './public/css/style.css',
     './public/js/main.js',
     './public/js/ai_chat.js',
+    './public/js/features.js',
+    './public/vendor/lucide.min.js',
     './public/js/bg-effects.js',
     './manifest.json'
 ];
@@ -29,7 +31,7 @@ self.addEventListener('activate', (event) => {
     event.waitUntil((async () => {
         // 清掉舊版本 cache
         const keys = await caches.keys();
-        await Promise.all(keys.map((k) => (k !== CACHE_NAME ? caches.delete(k) : Promise.resolve())));
+        await Promise.all(keys.map((k) => (k.startsWith('fitconnect-') && k !== CACHE_NAME ? caches.delete(k) : Promise.resolve())));
         await self.clients.claim(); // 立即接管頁面
     })());
 });
@@ -44,13 +46,19 @@ self.addEventListener('fetch', (event) => {
     // 只處理同源資源（避免干擾 CDN）
     if (url.origin !== self.location.origin) return;
 
+    // Private APIs and all writes always go to the network, including when offline.
+    if (req.method !== 'GET' || url.pathname.endsWith('.php') || url.searchParams.has('action')) return;
+    const staticAsset = ASSETS_TO_CACHE.some(path => new URL(path, self.location.href).pathname === url.pathname)
+        || /\.(?:png|jpg|jpeg|gif|webp|ico|svg|woff2?)$/i.test(url.pathname);
+    if (!staticAsset) return;
+
     // 導航請求（index.html 等）—優先網路，失敗再用快取
     if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
         event.respondWith((async () => {
             try {
                 const fresh = await fetch(req);
                 const cache = await caches.open(CACHE_NAME);
-                cache.put(req, fresh.clone());
+                if (fresh.ok) await cache.put(req, fresh.clone());
                 return fresh;
             } catch (e) {
                 const cached = await caches.match(req);
@@ -65,13 +73,14 @@ self.addEventListener('fetch', (event) => {
         const cached = await caches.match(req);
         const fetchPromise = fetch(req).then(async (fresh) => {
             const cache = await caches.open(CACHE_NAME);
-            cache.put(req, fresh.clone());
+            if (fresh.ok) await cache.put(req, fresh.clone());
             return fresh;
         }).catch(() => null);
+        event.waitUntil(fetchPromise);
 
         // main.js 特別重要：如果有新版本，要盡快更新
         // 先回 cached（快），同時背景更新；若沒 cached，等網路
-        return cached || (await fetchPromise) || cached;
+        return cached || (await fetchPromise) || Response.error();
     })());
 });
 
