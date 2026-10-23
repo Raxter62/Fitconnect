@@ -284,15 +284,25 @@ function fcResetFeatures() {
     if (window.fcResetChat) window.fcResetChat();
 }
 
-function fcExpireSession() {
+function fcExpireSession(message = '登入已失效，請重新登入。') {
     if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+    if (bindPollInterval) clearInterval(bindPollInterval);
+    autoRefreshInterval = bindPollInterval = null;
+    leaderboardLoadSeq++;
+    statsLoadSeq++;
+    isDemoMode = false;
     currentUser = null;
     csrfToken = '';
     fcResetFeatures();
     document.getElementById('chat-window').style.display = 'none';
+    document.querySelector('.nav-links').classList.remove('active');
+    document.querySelectorAll('.nav-toggle span').forEach(span => {
+        span.style.transform = 'none';
+        span.style.opacity = '1';
+    });
     showLogin();
     fcAccountView('login');
-    fcAuthMessage('登入已失效，請重新登入。');
+    fcAuthMessage(message);
 }
 
 function fcEditWorkout(row) {

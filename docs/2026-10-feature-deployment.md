@@ -112,7 +112,9 @@ LINE 綁定亦檢查唯一性；若舊資料有同一個 LINE ID 綁定多個帳
 - 運動紀錄改為獨立的 `#workouts` 頁面；首頁輸入區後直接銜接數據分析。桌機每頁 20 筆、手機每頁 10 筆，後端只接受這兩種分頁大小。
 - AI教練無法回答時，對外統一顯示「這個問題我沒辦法回答喔」，診斷代碼留在後端日誌。顯示報告時不附重複資料來源或時區文字，實際查詢仍固定台北時區，熱量仍標示為估計。
 - `db/schema.sql` 已補齊最新結構；歷史升級 SQL 與 `db/migrate.php` 仍保留。已完成 20261022 升級的正式站不需因這次介面更新再次遷移，也不要刪除 `schema_migrations` 紀錄。
-- Service Worker 只快取指定靜態檔案，API、驗證連結與寫入不快取。安裝新版後需關閉舊分頁並重新開啟 PWA；舊版離線快取會在啟用新版時清除。
+- Service Worker 只快取指定靜態檔案，API、驗證連結與寫入不快取。HTML、JS、CSS 在線時優先讀取網路，圖片可背景更新；斷網只使用相符版本的快取。新 Worker 完成必要檔案快取後才啟用，避免新 HTML 搭配舊程式。更新後重新整理或關閉重開 PWA。
+- 頁面最底部顯示小字版本，例如 `v2026.10.23.3-012345abcdef`。Docker 建置時會執行 `tools/stamp-release.php`，依程式與靜態資源內容自動產生後段識別碼，同步更新頁尾、HTML metadata、JS/CSS 網址與 Service Worker。相同程式重建的識別碼相同，有程式或圖片變更才換碼，不依賴容器內存在 Git，也不包含 `.env` 或正式資料庫內容。
+- `release.json`、`tools/stamp-release.php`、Dockerfile 與前端修正都需要進 Git；測試產物與 `.test-runtime` 不需要。更新來源後必須重新 build PHP 映像並重建 `fitconnect` 服務，只有 `git pull` 或重啟舊容器不會套用新檔。正式站本次不必再執行 migration。`php tools/stamp-release.php --check` 可唯讀查看預計建置識別碼。
 - Apache 請確保啟用 rewrite 且允許此專案的 `.htaccess` 生效，用以禁止瀏覽資料庫腳本、測試與設定檔。Dockerfile 已啟用 rewrite；若自行使用 Nginx，需在站台設定中對上述目錄與內部 PHP 檔加入等效拒絕規則。
 
 ## 七、上線驗收

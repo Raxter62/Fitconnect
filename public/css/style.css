@@ -1470,6 +1470,21 @@ body {
 }
 
 /* Account flows and record management share the existing FitConnect palette. */
+.app-footer {
+    padding: 12px max(20px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+    color: #666;
+    background: #fff;
+    position: relative;
+    z-index: 10;
+}
+
+.app-footer small {
+    display: block;
+    font-size: 0.7rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
 .auth-container {
     min-height: 100dvh;
     height: auto;
@@ -1939,6 +1954,10 @@ button:disabled {
 }
 
 @media (max-width: 768px) {
+    .app-footer small {
+        max-width: calc(40vw - 20px);
+    }
+
     .auth-card {
         padding: 24px 20px;
     }
@@ -1973,7 +1992,7 @@ button:disabled {
 
     #ai-coach-container {
         transform: none !important;
-        right: max(0px, env(safe-area-inset-right));
+        right: 0;
         bottom: 0;
     }
 

@@ -70,9 +70,10 @@ if (document.readyState === 'loading') {
 // ✅ Service Worker register
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./service-worker.js')
+        navigator.serviceWorker.register('./service-worker.js', { updateViaCache: 'none' })
             .then((reg) => {
                 console.log('SW registered!', reg);
+                reg.update().catch(err => console.log('SW update unavailable:', err));
 
                 // （可選）如果有新版在 waiting，請它立刻接管
                 if (reg.waiting) {
@@ -235,28 +236,27 @@ function demoLogin() {
     showDashboard();
 }
 
+let logoutPending = false;
+
 async function logout() {
+    if (logoutPending) return;
+    logoutPending = true;
+    const button = document.getElementById('nav-logout');
+    button?.setAttribute('aria-busy', 'true');
     console.log('👋 登出中...');
-
-    if (!isDemoMode) {
-        // 呼叫 API 清除 Session
-        await fetchPost('logout', {});
+    try {
+        if (!isDemoMode) {
+            const result = await fetchPost('logout', {});
+            if (!result.success && currentUser) throw new Error('Logout was not confirmed');
+        }
+        fcExpireSession('');
+    } catch (error) {
+        console.error('Logout failed:', error);
+        alert('暫時無法登出，請稍後再試。');
+    } finally {
+        logoutPending = false;
+        button?.removeAttribute('aria-busy');
     }
-
-    // 清除前端狀態
-    if (bindPollInterval) clearInterval(bindPollInterval);
-    if (autoRefreshInterval) clearInterval(autoRefreshInterval);
-    // stopLeaderboardPolling(); // Deprecated
-    isDemoMode = false;
-    currentUser = null;
-    csrfToken = '';
-    leaderboardLoadSeq++;
-    statsLoadSeq++;
-    fcResetFeatures();
-    document.getElementById('chat-window').style.display = 'none';
-
-    // 直接切換回登入頁面（不重新載入）
-    showLogin();
 }
 
 // === 表單設置（加強版）===

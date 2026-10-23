@@ -1,30 +1,26 @@
-// service-worker.js
-// 目標：保留原本離線快取功能，但修復「永遠吃到舊 main.js」的問題（cache-first + 固定版本號）。
-
-// 每次更新前端資源（main.js / css / html）都要更新版本號，讓瀏覽器抓新檔。
-// 這不會改變任何功能，只是讓瀏覽器知道要更新快取。
-const CACHE_VERSION = 'v11-2026-10-23-coach-alignment-smooth-nav';
+// Keep this version aligned with the HTML footer and local asset URLs.
+const APP_VERSION = '2026.10.23.3';
+const CACHE_VERSION = `v12-${APP_VERSION}`;
 const CACHE_NAME = `fitconnect-${CACHE_VERSION}`;
 
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
-    './public/css/style.css',
-    './public/js/main.js',
-    './public/js/ai_chat.js',
-    './public/js/features.js',
-    './public/vendor/lucide.min.js',
-    './public/js/bg-effects.js',
+    `./public/css/style.css?v=${APP_VERSION}`,
+    `./public/js/main.js?v=${APP_VERSION}`,
+    `./public/js/ai_chat.js?v=${APP_VERSION}`,
+    `./public/js/features.js?v=${APP_VERSION}`,
+    `./public/vendor/lucide.min.js?v=${APP_VERSION}`,
+    `./public/js/bg-effects.js?v=${APP_VERSION}`,
     './manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
-    self.skipWaiting(); // 立即進入 waiting -> activate
-    event.waitUntil(
-        caches.open(CACHE_NAME)
-            .then((cache) => cache.addAll(ASSETS_TO_CACHE))
-            .catch((err) => console.log('Cache addAll error:', err))
-    );
+    event.waitUntil((async () => {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.addAll(ASSETS_TO_CACHE.map(path => new Request(new URL(path, self.location.href), { cache: 'reload' })));
+        await self.skipWaiting();
+    })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -36,9 +32,7 @@ self.addEventListener('activate', (event) => {
     })());
 });
 
-// 策略：
-// - 對 HTML 導航：network-first（確保更新）
-// - 對 main.js/其他靜態資源：stale-while-revalidate（先用快取，背景更新）
+// HTML, JS and CSS must be fresh together; images can update in the background.
 self.addEventListener('fetch', (event) => {
     const req = event.request;
     const url = new URL(req.url);
@@ -52,40 +46,38 @@ self.addEventListener('fetch', (event) => {
         || /\.(?:png|jpg|jpeg|gif|webp|ico|svg|woff2?)$/i.test(url.pathname);
     if (!staticAsset) return;
 
-    // 導航請求（index.html 等）—優先網路，失敗再用快取
-    if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
+    const navigation = req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html');
+    if (navigation || /\.(?:js|css)$/i.test(url.pathname)) {
         event.respondWith((async () => {
+            const cache = await caches.open(CACHE_NAME);
             try {
-                const fresh = await fetch(req);
-                const cache = await caches.open(CACHE_NAME);
+                const fresh = await fetch(req, { cache: 'no-cache' });
                 if (fresh.ok) await cache.put(req, fresh.clone());
                 return fresh;
             } catch (e) {
-                const cached = await caches.match(req);
-                return cached || caches.match('./index.html');
+                const cached = await cache.match(req);
+                return cached || (navigation && await cache.match('./index.html')) || Response.error();
             }
         })());
         return;
     }
 
-    // JS/CSS 等靜態資源：stale-while-revalidate
     event.respondWith((async () => {
-        const cached = await caches.match(req);
+        const cache = await caches.open(CACHE_NAME);
+        const cached = await cache.match(req);
         const fetchPromise = fetch(req).then(async (fresh) => {
-            const cache = await caches.open(CACHE_NAME);
             if (fresh.ok) await cache.put(req, fresh.clone());
             return fresh;
         }).catch(() => null);
         event.waitUntil(fetchPromise);
 
-        // main.js 特別重要：如果有新版本，要盡快更新
-        // 先回 cached（快），同時背景更新；若沒 cached，等網路
         return cached || (await fetchPromise) || Response.error();
     })());
 });
 
 // 可選：讓頁面主動要求 SW 立即更新
 self.addEventListener('message', (event) => {
+    if (event.data?.type === 'GET_VERSION') event.ports[0]?.postMessage({ version: APP_VERSION });
     if (event.data === 'SKIP_WAITING') {
         self.skipWaiting();
     }

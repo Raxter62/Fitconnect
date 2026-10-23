@@ -1,6 +1,6 @@
 Options -Indexes
 RewriteEngine On
-RewriteRule ^(?:db|docs|tests|illustrate|LLM|test-results|\.test-runtime)(?:/|$) - [F,L]
+RewriteRule ^(?:db|docs|tests|tools|illustrate|LLM|test-results|\.test-runtime)(?:/|$) - [F,L]
 RewriteRule ^\.(?:env|git)(?:[./]|$) - [F,L]
 <FilesMatch "^(?:config|auth|mail|workout|reports)\.php$">
     Require all denied

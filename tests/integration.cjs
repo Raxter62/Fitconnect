@@ -266,7 +266,11 @@ async function run() {
     console.log(await phpRun(['tests/contracts.php']));
     console.log(await phpRun(['-d', 'disable_functions=curl_setopt,curl_setopt_array,curl_exec,curl_getinfo', 'tests/provider-contracts.php'], { GEMINI_API_KEY: 'test-gemini-key', RESEND_API_KEY: 'test-mail-key' }));
     check('provider contracts use no external requests', () => {});
-    if (process.argv.includes('--ui')) await uiTests();
+    await releaseTests();
+    if (process.argv.includes('--ui')) {
+        await uiTests();
+        await upgradeUiTests();
+    }
     await db.exec("CREATE FUNCTION test_fail_total() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test rollback'; END $$; CREATE TRIGGER test_fail_total BEFORE INSERT OR UPDATE ON user_totals FOR EACH ROW EXECUTE FUNCTION test_fail_total();");
     result = await a.request('add_workout', { ...workout, minutes: 10 });
     check('failed totals update fails entire write', () => assert.equal(result.status, 500));
@@ -299,6 +303,12 @@ async function uiTests() {
         page.on('request', request => { if (request.url().includes('action=list_workouts')) historyRequests.push(request.url()); });
         await page.goto(base, { waitUntil: 'networkidle' });
         await page.waitForTimeout(350);
+        const release = await page.locator('meta[name="fitconnect-version"]').getAttribute('content');
+        check(`${name} footer and assets share the same release`, () => {});
+        assert.equal(await page.locator('#app-version').innerText(), 'v' + release);
+        const assetVersions = await page.evaluate(() => [...document.querySelectorAll('script[src], link[rel="stylesheet"]')]
+            .map(element => new URL(element.src || element.href)).filter(url => url.origin === location.origin).map(url => url.searchParams.get('v')));
+        assert.ok(assetVersions.length >= 6 && assetVersions.every(version => version === release));
         await page.screenshot({ path: path.join(root, `test-results/${name}-login.png`) });
         await page.click('#open-forgot');
         await page.screenshot({ path: path.join(root, `test-results/${name}-forgot.png`) });
@@ -532,11 +542,207 @@ async function uiTests() {
             check(`${name} navigation retains the coach visibility preference`, () => {});
             assert.equal(await page.locator('#ai-coach-container').isVisible(), false);
         }
+        await page.route('**/submit.php?action=logout', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ success: false }) }));
+        let logoutMessage = '';
+        page.once('dialog', async dialog => { logoutMessage = dialog.message(); await dialog.dismiss(); });
+        if (width <= 768) await page.click('.nav-toggle');
+        await page.click('#nav-logout');
+        await page.waitForFunction(() => !logoutPending);
+        check(`${name} failed logout preserves the active session`, () => {});
+        assert.equal(logoutMessage, '暫時無法登出，請稍後再試。');
+        assert.equal(await page.locator('#dashboard-view').isVisible(), true);
+        if (width <= 768) await page.click('.nav-toggle');
+        await page.click('.nav-links [href="#section-charts"]');
+        await page.waitForFunction(() => location.hash === '#section-charts' && scrollY > 100);
+        check(`${name} navigation still works after failed logout`, () => {});
+        await page.unroute('**/submit.php?action=logout');
+        if (width <= 768) await page.click('.nav-toggle');
+        await page.click('#nav-logout');
+        await page.waitForSelector('#auth-view:not(.hidden)');
+        check(`${name} logout returns to login and revokes the server session`, () => {});
+        assert.equal((await api.request('get_user_info', {}, 'GET')).status, 401);
+        assert.equal(await page.locator('#chat-window').isVisible(), false);
+        await page.fill('#login-email', 'athlete-b@example.test');
+        await page.fill('#login-password', 'PreviewFit123!');
+        await page.click('#login-form [type=submit]');
+        await page.waitForSelector('#dashboard-view:not(.hidden)');
+        if (width <= 768) await page.click('.nav-toggle');
+        await page.click('.nav-links [href="#workouts"]');
+        await page.waitForSelector('#history-view:not(.hidden)');
+        check(`${name} logging in again restores navigation`, () => {});
+        await page.locator('#app-version').scrollIntoViewIfNeeded();
+        await page.waitForTimeout(150);
+        const readableVersion = await page.locator('#app-version').evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            return element.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2));
+        });
+        check(`${name} small footer version is readable at the page bottom`, () => assert.equal(readableVersion, true));
+        await page.screenshot({ path: path.join(root, `test-results/${name}-version.png`) });
         await page.goto(base + '/#auth=verify&token=' + 'a'.repeat(64), { waitUntil: 'networkidle' });
         await page.waitForSelector('#verify-form:not(.hidden)');
         check(`${name} workout routing does not break email token links`, () => assert.equal(new URL(page.url()).hash, ''));
         check(`${name} all navigation completes without JavaScript errors`, () => assert.deepEqual(errors, []));
         await context.close();
+    }
+}
+
+async function releaseTests() {
+    const fixture = path.join(root, '.test-runtime', 'release-test-' + randomBytes(5).toString('hex'));
+    try {
+        for (const file of ['index.html', 'service-worker.js', 'manifest.json', 'Dockerfile', '.htaccess', 'release.json', 'tools/stamp-release.php', 'public/js/main.js']) {
+            await fs.mkdir(path.dirname(path.join(fixture, file)), { recursive: true });
+            await fs.copyFile(path.join(root, file), path.join(fixture, file));
+        }
+        const script = path.join(fixture, 'tools/stamp-release.php');
+        const first = (await phpRun([script])).trim();
+        const second = (await phpRun([script])).trim();
+        check('release stamp is stable when rebuilding identical content', () => assert.equal(first, second));
+        const html = await fs.readFile(path.join(fixture, 'index.html'), 'utf8');
+        const worker = await fs.readFile(path.join(fixture, 'service-worker.js'), 'utf8');
+        check('release build stamps the footer, metadata, asset URLs and service worker together', () => {
+            assert.match(first, /^2026\.10\.23\.3-[a-f0-9]{12}$/);
+            assert.ok(html.includes(`content="${first}"`) && html.includes(`>v${first}</small>`));
+            assert.ok(html.includes(`style.css?v=${first}`) && html.includes(`ai_chat.js?v=${first}`));
+            assert.ok(worker.includes(`APP_VERSION = '${first}'`));
+        });
+        await fs.appendFile(path.join(fixture, 'public/js/main.js'), '\n// Changed test release\n');
+        const changed = (await phpRun([script])).trim();
+        check('changing application content automatically changes the next build version', () => assert.notEqual(changed, first));
+    } finally {
+        assert.ok(path.resolve(fixture).startsWith(path.resolve(root, '.test-runtime') + path.sep));
+        await fs.rm(fixture, { recursive: true, force: true });
+    }
+}
+
+async function upgradeUiTests() {
+    const legacyAssets = [];
+    for (const file of ['public/js/ai_chat.js', 'public/js/features.js', 'public/css/style.css']) {
+        let body = await fs.readFile(path.join(root, file), 'utf8');
+        if (file.endsWith('ai_chat.js')) body = body.replaceAll('?.addEventListener', '.addEventListener');
+        if (file.endsWith('features.js')) body = body.replace("getElementById('coach-privacy-dialog')?.close()", "getElementById('coach-privacy-dialog').close()").replace("'instant' : 'smooth'", "'instant' : 'instant'");
+        if (file.endsWith('.css')) body += '\n#ai-coach-container { right: 18px !important; bottom: 20px !important; }';
+        legacyAssets.push([file, body, file.endsWith('.css') ? 'text/css' : 'application/javascript']);
+    }
+    const legacyWorker = `
+        self.addEventListener('install', event => event.waitUntil((async () => {
+            const cache = await caches.open('fitconnect-legacy-fixture');
+            for (const [path, body, type] of ${JSON.stringify(legacyAssets)}) {
+                await cache.put(new URL(path, self.location.href), new Response(body, { headers: { 'Content-Type': type } }));
+            }
+            await self.skipWaiting();
+        })()));
+        self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+        self.addEventListener('fetch', event => {
+            const request = event.request;
+            if (request.method !== 'GET' || !new URL(request.url).pathname.includes('/public/')) return;
+            event.respondWith(caches.match(request).then(cached => cached || fetch(request)));
+        });`;
+    let upgraded = false;
+    const proxy = http.createServer((request, response) => {
+        if (request.url === '/service-worker.js' && !upgraded) {
+            response.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-store' });
+            response.end(legacyWorker);
+        } else if (request.url === '/?legacy-bootstrap=1') {
+            response.writeHead(200, { 'Content-Type': 'text/html' });
+            response.end('<!DOCTYPE html><script>navigator.serviceWorker.register("/service-worker.js")</script>');
+        } else {
+            const upstream = http.request(base + request.url, { method: request.method, headers: { ...request.headers, Connection: 'close' } }, result => {
+                response.writeHead(result.statusCode, { ...result.headers, Connection: 'close' });
+                result.pipe(response);
+            });
+            upstream.on('error', () => { response.writeHead(502); response.end(); });
+            request.pipe(upstream);
+        }
+    });
+    await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    const upgradeBase = `http://127.0.0.1:${proxy.address().port}`;
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+        await page.goto(upgradeBase + '/?legacy-bootstrap=1');
+        await page.waitForFunction(() => navigator.serviceWorker.controller);
+        const oldCache = await page.evaluate(async () => (await (await caches.open('fitconnect-legacy-fixture')).keys()).length);
+        check('upgrade fixture has a controlling old worker and stale unversioned assets', () => assert.equal(oldCache, 3));
+        await page.goto(upgradeBase, { waitUntil: 'networkidle' });
+        await page.waitForTimeout(350);
+        await page.fill('#login-email', 'athlete-a@example.test');
+        await page.fill('#login-password', 'NewFitconnect123!');
+        await page.click('#login-form [type=submit]');
+        await page.waitForSelector('#dashboard-view:not(.hidden)');
+        await page.locator('.coach-img-wrapper').click();
+        await page.click('.chat-shortcuts [data-report=week]');
+        await page.waitForSelector('.report-interpret');
+        await page.click('.chat-shortcuts [data-report=day]');
+        await page.waitForFunction(() => document.querySelectorAll('.report-facts').length === 2 && !coachBusy);
+        check('old-cache upgrade keeps both chat report shortcuts working', () => {});
+        await page.fill('#chat-input', '今天適合散步嗎？');
+        await page.click('#chat-send');
+        await page.waitForFunction(() => !coachBusy);
+        assert.equal(await page.locator('.chat-msg.ai').last().innerText(), '這個問題我沒辦法回答喔');
+        check('old-cache upgrade can send chat messages', () => {});
+        await page.click('#chat-close');
+        await page.evaluate(() => {
+            window.__upgradeScrolls = [];
+            window.__upgradeScroll = () => window.__upgradeScrolls.push(scrollY);
+            window.addEventListener('scroll', window.__upgradeScroll);
+        });
+        await page.click('.nav-toggle');
+        await page.click('.nav-links [href="#section-charts"]');
+        await page.waitForTimeout(1200);
+        const motion = await page.evaluate(() => {
+            window.removeEventListener('scroll', window.__upgradeScroll);
+            return { end: scrollY, samples: window.__upgradeScrolls };
+        });
+        check('old-cache upgrade restores actual smooth navigation', () => assert.ok(motion.samples.some(y => y > 5 && y < motion.end - 5)));
+        const edge = await page.locator('#ai-coach-container').evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            return { right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight };
+        });
+        check('old-cache upgrade uses the new mobile coach position', () => assert.ok(Math.abs(edge.right - edge.width) < 1 && Math.abs(edge.bottom - edge.height) < 1));
+        await page.click('.nav-toggle');
+        await page.click('#nav-logout');
+        await page.waitForSelector('#auth-view:not(.hidden)');
+        check('old-cache upgrade logs out without leaving a dead dashboard', () => {});
+        upgraded = true;
+        await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration(); await registration.update(); });
+        await page.waitForFunction(async () => (await caches.keys()).some(key => key.startsWith('fitconnect-v12-')) && !(await caches.keys()).includes('fitconnect-legacy-fixture'));
+        await page.waitForFunction(() => new Promise(resolve => {
+            const channel = new MessageChannel();
+            const timer = setTimeout(() => { channel.port1.close(); resolve(false); }, 500);
+            channel.port1.onmessage = event => {
+                clearTimeout(timer);
+                channel.port1.close();
+                resolve(event.data.version === document.querySelector('meta[name="fitconnect-version"]').content);
+            };
+            navigator.serviceWorker.controller?.postMessage({ type: 'GET_VERSION' }, [channel.port2]);
+        }));
+        check('new worker activates after precaching and removes the old cache', () => {});
+        await page.evaluate(async () => {
+            const key = (await caches.keys()).find(name => name.startsWith('fitconnect-v12-'));
+            const cache = await caches.open(key);
+            const version = document.querySelector('meta[name="fitconnect-version"]').content;
+            await cache.put(`public/js/ai_chat.js?v=${version}`, new Response('throw new Error("STALE_VERSIONED_SCRIPT")', { headers: { 'Content-Type': 'application/javascript' } }));
+            await cache.put(`public/css/style.css?v=${version}`, new Response('#app-version { display: none }', { headers: { 'Content-Type': 'text/css' } }));
+        });
+        await page.reload({ waitUntil: 'networkidle' });
+        await page.waitForTimeout(350);
+        check('online reload replaces stale versioned CSS and JavaScript before execution', () => {});
+        assert.equal(await page.locator('#app-version').isVisible(), true);
+        assert.deepEqual(errors, []);
+        await page.locator('#app-version').scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(root, 'test-results/mobile-upgraded-version.png') });
+        await context.setOffline(true);
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(350);
+        check('current release remains available offline without loading another release', () => {});
+        assert.equal(await page.locator('#app-version').innerText(), 'v2026.10.23.3');
+        assert.deepEqual(errors, []);
+    } finally {
+        await context.close();
+        proxy.closeAllConnections();
+        await new Promise(resolve => proxy.close(resolve));
     }
 }
 

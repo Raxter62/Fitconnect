@@ -5,12 +5,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
+    <meta name="fitconnect-version" content="2026.10.23.3">
     <title>FitConnect 運動平台</title>
     <link rel="icon" href="public/image/logo/logo.png">
     <link rel="manifest" href="manifest.json">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-    <link rel="stylesheet" href="public/css/style.css">
+    <link rel="stylesheet" href="public/css/style.css?v=2026.10.23.3">
 
 
 </head>
@@ -130,7 +131,7 @@
                     <a href="#section-leaderboard" data-dashboard-link>排行榜</a>
                     <a href="#line-bind-section" data-dashboard-link>綁定</a>
                     <a href="#" id="nav-coach-toggle" onclick="toggleAICoach(event)">AI教練: ON</a>
-                    <a href="#" onclick="event.preventDefault(); logout()">登出</a>
+                    <a href="#" id="nav-logout" onclick="event.preventDefault(); logout()">登出</a>
                     <a href="#" id="pwa-install-btn" style="display: none;" onclick="event.preventDefault(); triggerInstall()">安裝 FitConnect</a>
                 </div>
             </div>
@@ -469,13 +470,14 @@
         </dialog>
 
 
-        <script src="public/js/main.js"></script>
-        <script src="public/vendor/lucide.min.js"></script>
-        <script src="public/js/features.js"></script>
+        <script src="public/js/main.js?v=2026.10.23.3"></script>
+        <script src="public/vendor/lucide.min.js?v=2026.10.23.3"></script>
+        <script src="public/js/features.js?v=2026.10.23.3"></script>
 
-        <script src="public/js/bg-effects.js"></script>
-        <script src="public/js/ai_chat.js"></script>
+        <script src="public/js/bg-effects.js?v=2026.10.23.3"></script>
+        <script src="public/js/ai_chat.js?v=2026.10.23.3"></script>
     </div>
+    <footer class="app-footer"><small id="app-version">v2026.10.23.3</small></footer>
 </body>
 
 </html>

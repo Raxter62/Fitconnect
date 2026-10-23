@@ -29,6 +29,7 @@ RUN rm -f /etc/apache2/mods-enabled/mpm_*.load /etc/apache2/mods-enabled/mpm_*.c
 # 複製專案檔案
 WORKDIR /var/www/html
 COPY . /var/www/html
+RUN php tools/stamp-release.php
 
 
 EXPOSE 80
