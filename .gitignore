@@ -64,8 +64,8 @@ desktop.ini
 # =========================
 db_test.php
 test_email.php
-db/migrations/
-db/migrate.php
+
+
 node_modules/
 # Local integration-test dependencies and generated evidence.
 .test-runtime/
