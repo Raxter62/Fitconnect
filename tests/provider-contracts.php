@@ -53,12 +53,14 @@ check_contract(count($payload['contents']) === 2, 'Server context should be incl
 $serialized = json_encode($payload, JSON_UNESCAPED_UNICODE);
 check_contract(strpos($serialized, $user['email']) === false && strpos($serialized, 'password_hash') === false, 'Personal identity should not be sent');
 check_contract(in_array('x-goog-api-key: test-gemini-key', $request[CURLOPT_HTTPHEADER], true), 'Gemini must receive server-side key header');
-$mockStatus = 429;
+check_contract(strpos($serialized, '保留同理心') !== false, 'Prompt should keep a warm conversational tone');
+foreach ([400, 401, 403, 404, 429, 500] as $mockStatus) {
 $mockBody = '{"error":{"message":"DO_NOT_EXPOSE_UPSTREAM_DETAIL"}}';
 try {
     askCoachFromDb($pdo, (int)$user['id'], '運動建議');
     throw new LogicException('Rate error should not succeed');
 } catch (RuntimeException $e) {
-    check_contract(strpos($e->getMessage(), 'DO_NOT_EXPOSE') === false && strpos($e->getMessage(), '額度') !== false, 'Upstream errors must be sanitized');
+    check_contract($e->getMessage() === FC_COACH_UNAVAILABLE, 'Provider errors must use the public fallback');
+}
 }
 echo "Email link creation/cooldown/consumption and Gemini request/response contracts passed without external calls.\n";

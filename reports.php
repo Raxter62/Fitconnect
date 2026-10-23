@@ -56,11 +56,11 @@ function fc_build_report(PDO $pdo, int $userId, string $period, ?DateTimeImmutab
 
 function fc_report_text(array $report): string {
     $t = $report['totals'];
-    $text = $report['title'] . "\n" . $report['start'] . ' 至 ' . $report['end'] . "（台北時間）\n"
+    $text = $report['title'] . "\n" . $report['start'] . ' 至 ' . $report['end'] . "\n"
         . "已記錄 {$t['sessions']} 筆・{$t['active_days']} 天\n運動 {$t['minutes']} 分鐘・估計消耗 {$t['calories']} kcal";
     if (!$t['sessions']) $text .= "\n此期間尚無運動紀錄，不代表您沒有運動。";
     foreach ($report['sports'] as $sport) $text .= "\n{$sport['type']}：{$sport['minutes']} 分鐘／{$sport['sessions']} 筆";
     $change = $report['minutes_change'];
     $text .= "\n較{$report['comparison_label']}" . ($change >= 0 ? '增加 ' : '減少 ') . abs($change) . ' 分鐘。';
-    return $text . "\n資料來源：已儲存的運動紀錄；熱量為估計值。";
+    return $text;
 }

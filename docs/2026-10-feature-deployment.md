@@ -89,7 +89,10 @@ LINE 綁定亦檢查唯一性；若舊資料有同一個 LINE ID 綁定多個帳
 - 修改或刪除後，不再符合門檻的成就會撤銷。日後再次達標可重新獲得；先前寄出的成就信無法收回。歷史排行榜快照保留當時資料，當前排行榜從目前資料計算。
 - 新紀錄保存當時體重，日後修改種類或分鐘依該體重計算。舊紀錄沒有當時體重，修改種類或分鐘時採目前體重並提示；只改日期不更動原熱量。
 - 週報計算本週一零時至查詢當下；比較上週相同經過時間。當日分析比較昨日相同時間。統一使用台北時區。
-- 讀取報告不呼叫 Google，不消耗 AI 額度。「請 AI 解讀」才呼叫 Gemini。一般聊天也會重新讀取所選期間的後端資料。
+- 讀取報告不呼叫 Google，不消耗 AI 額度。「請AI教練解讀」才呼叫 Gemini。一般聊天也會重新讀取所選期間的後端資料，但不會自動再插入整份報告。資料傳送範圍可從聊天室的資訊圖示查看。
+- 運動紀錄改為獨立的 `#workouts` 頁面；首頁輸入區後直接銜接數據分析。桌機每頁 20 筆、手機每頁 10 筆，後端只接受這兩種分頁大小。
+- AI教練無法回答時，對外統一顯示「這個問題我沒辦法回答喔」，診斷代碼留在後端日誌。顯示報告時不附重複資料來源或時區文字，實際查詢仍固定台北時區，熱量仍標示為估計。
+- `db/schema.sql` 已補齊最新結構；歷史升級 SQL 與 `db/migrate.php` 仍保留。已完成 20261022 升級的正式站不需因這次介面更新再次遷移，也不要刪除 `schema_migrations` 紀錄。
 - Service Worker 只快取指定靜態檔案，API、驗證連結與寫入不快取。安裝新版後需關閉舊分頁並重新開啟 PWA；舊版離線快取會在啟用新版時清除。
 - Apache 請確保啟用 rewrite 且允許此專案的 `.htaccess` 生效，用以禁止瀏覽資料庫腳本、測試與設定檔。Dockerfile 已啟用 rewrite；若自行使用 Nginx，需在站台設定中對上述目錄與內部 PHP 檔加入等效拒絕規則。
 
@@ -111,7 +114,9 @@ npm install --prefix .test-runtime --ignore-scripts @electric-sql/pglite @electr
 node tests/integration.cjs --ui
 ```
 
-測試使用記憶體中的 PGlite PostgreSQL 與本機 PHP，結束後清除；不連正式資料庫、不呼叫 Google、不寄真實郵件。若不同電腦，設定 `PHP_BIN` 為有 mbstring、curl、pdo_pgsql 的 PHP 執行檔；UI 測試另以 `PLAYWRIGHT_PATH` 指向已安裝的 Playwright。PGlite 不能代替正式 PostgreSQL 的多連線併發壓力測試。
+測試使用記憶體中的 PGlite PostgreSQL 與本機 PHP，結束後清除；不連正式資料庫、不呼叫 Google、不寄真實郵件。設定 `PHP_BIN` 為已修補且啟用 mbstring、curl、pdo_pgsql 的 PHP 執行檔；未設定時使用 PATH 上的 `php`。UI 測試另以 `PLAYWRIGHT_PATH` 指向已安裝的 Playwright。PGlite 不能代替正式 PostgreSQL 的多連線併發壓力測試。
+
+若測試連接埠已被占用，可設定 `FC_TEST_HTTP_PORT` 與 `FC_TEST_PG_PORT`，不必停止其他程式。
 
 本次另外使用真正的 PostgreSQL 18 執行相同驗證（Windows 測試套件僅放 `.test-runtime`，未註冊系統服務）：
 

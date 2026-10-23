@@ -114,7 +114,7 @@
         <nav class="navbar-wrapper">
             <div class="navbar-shape"></div>
             <div class="navbar-content">
-                <a href="#" class="nav-logo-area">
+                <a href="#section-hero" class="nav-logo-area" data-dashboard-link>
                     <img src="public/image/logo/logoremovebg.png" alt="Logo" class="nav-logo-img">
                     <span class="nav-logo-text">FitConnect</span>
                 </a>
@@ -124,18 +124,19 @@
                     <span></span>
                 </button>
                 <div class="nav-links">
-                    <a href="#section-hero" class="active">紀錄</a>
-                    <a href="#section-history">歷史紀錄</a>
-                    <a href="#section-charts">分析</a>
-                    <a href="#section-leaderboard">排行榜</a>
-                    <a href="#line-bind-section">綁定</a>
+                    <a href="#section-hero" class="active" data-dashboard-link>新增紀錄</a>
+                    <a href="#workouts" data-dashboard-link>運動紀錄</a>
+                    <a href="#section-charts" data-dashboard-link>分析</a>
+                    <a href="#section-leaderboard" data-dashboard-link>排行榜</a>
+                    <a href="#line-bind-section" data-dashboard-link>綁定</a>
                     <a href="#" id="nav-coach-toggle" onclick="toggleAICoach(event)">AI教練: ON</a>
-                    <a href="#" onclick="logout()">登出</a>
-                    <a href="#" id="pwa-install-btn" style="display: none;" onclick="triggerInstall()">安裝 FitConnect</a>
+                    <a href="#" onclick="event.preventDefault(); logout()">登出</a>
+                    <a href="#" id="pwa-install-btn" style="display: none;" onclick="event.preventDefault(); triggerInstall()">安裝 FitConnect</a>
                 </div>
             </div>
         </nav>
 
+        <main id="home-view">
         <!-- Hero: 左大頭貼 右輸入 -->
         <section id="section-hero" class="container hero-container">
             <!-- 左 -->
@@ -195,27 +196,6 @@
             </div>
         </section>
 
-        <section id="section-history" class="workout-history-band">
-            <div class="container">
-                <div class="history-heading">
-                    <h2>運動紀錄</h2>
-                    <button type="button" class="icon-button" id="history-refresh" title="重新整理紀錄" aria-label="重新整理紀錄"><i data-lucide="refresh-cw"></i></button>
-                </div>
-                <p id="history-status" role="status" aria-live="polite"></p>
-                <div class="history-table-wrap">
-                    <table class="history-table">
-                        <thead><tr><th>日期與時間</th><th>運動</th><th>分鐘</th><th>估計熱量</th><th>操作</th></tr></thead>
-                        <tbody id="workout-history-body"></tbody>
-                    </table>
-                </div>
-                <div class="history-pagination">
-                    <button type="button" class="icon-button" id="history-prev" aria-label="上一頁" title="上一頁"><i data-lucide="chevron-left"></i></button>
-                    <span id="history-page" aria-live="polite">1 / 1</span>
-                    <button type="button" class="icon-button" id="history-next" aria-label="下一頁" title="下一頁"><i data-lucide="chevron-right"></i></button>
-                </div>
-            </div>
-        </section>
-
         <!-- Wave Divider -->
         <div class="wave-divider">
             <svg class="waves" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -236,7 +216,7 @@
         <!-- 圖表分析 -->
         <section id="section-charts">
             <div class="container">
-                <h2 style="text-align: center; margin-bottom: 2rem; font-size: 2.5rem; margin-top: 2rem;">數據分析</h2>
+                <h2 class="section-title charts-heading">數據分析</h2>
 
                 <!-- 全域時間切換 -->
                 <div class="global-time-switch">
@@ -298,7 +278,7 @@
 
         <!-- 排行榜 -->
         <section id="section-leaderboard" class="container">
-            <h2 style="text-align: center; margin-bottom: 2rem; font-size: 2.5rem;">排行榜</h2>
+            <h2 class="section-title">排行榜</h2>
             <div class="leaderboard-card">
                 <div class="leaderboard-time-switch">
                     <button class="g-time-btn" data-range="1d" onclick="setGlobalRange('1d')">1天</button>
@@ -407,27 +387,63 @@
 
         </div>
 
+        </main>
+
+        <main id="history-view" class="hidden" aria-labelledby="history-title">
+            <header class="history-page-header">
+                <div class="history-heading container">
+                    <a href="#section-hero" class="icon-button" title="返回首頁" aria-label="返回首頁" data-dashboard-link><i data-lucide="arrow-left"></i></a>
+                    <h2 id="history-title" class="section-title">運動紀錄</h2>
+                    <button type="button" class="icon-button" id="history-refresh" title="重新整理紀錄" aria-label="重新整理紀錄"><i data-lucide="refresh-cw"></i></button>
+                </div>
+                <div class="wave-divider history-waves" aria-hidden="true">
+                    <svg class="waves" xmlns="http://www.w3.org/2000/svg" viewBox="0 24 150 28" preserveAspectRatio="none">
+                        <defs><path id="history-wave" d="M-160 44c30 0 58-18 88-18s58 18 88 18 58-18 88-18 58 18 88 18v44h-352z" /></defs>
+                        <g class="parallax"><use href="#history-wave" x="48" y="0" /><use href="#history-wave" x="48" y="3" /><use href="#history-wave" x="48" y="5" /><use href="#history-wave" x="48" y="7" /></g>
+                    </svg>
+                </div>
+            </header>
+            <section id="section-history" class="workout-history-band" aria-label="歷史運動紀錄">
+                <div class="container">
+                    <p id="history-status" role="status" aria-live="polite"></p>
+                    <div id="history-empty" class="history-empty hidden"><i data-lucide="clipboard-list"></i><h3>還沒有運動紀錄</h3><p>目前沒有已儲存的紀錄。</p></div>
+                    <div class="history-table-wrap">
+                        <table class="history-table">
+                            <thead><tr><th scope="col">日期與時間</th><th scope="col">運動</th><th scope="col">分鐘</th><th scope="col">估計熱量</th><th scope="col">操作</th></tr></thead>
+                            <tbody id="workout-history-body"></tbody>
+                        </table>
+                    </div>
+                    <div class="history-pagination">
+                        <button type="button" class="icon-button" id="history-prev" aria-label="上一頁" title="上一頁"><i data-lucide="chevron-left"></i></button>
+                        <span id="history-page" aria-live="polite">1 / 1</span>
+                        <button type="button" class="icon-button" id="history-next" aria-label="下一頁" title="下一頁"><i data-lucide="chevron-right"></i></button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
         <!-- Coach 半身像 -->
         <div id="ai-coach-container" class="hidden">
             <div class="coach-img-wrapper" onclick="toggleChat()"
                 onmouseover="document.querySelector('.coach-full-img').src='public/image/tinin2.png'; document.getElementById('coach-bubble').style.opacity='1';"
                 onmouseout="document.querySelector('.coach-full-img').src='public/image/tinin.png'; document.getElementById('coach-bubble').style.opacity='0';">
                 <div class="coach-bubble" id="coach-bubble">今天想練什麼呢？</div>
-                <img src="public/image/tinin.png" class="coach-full-img" alt="AI Coach">
+                <img src="public/image/tinin.png" class="coach-full-img" alt="AI教練">
             </div>
         </div>
 
         <!-- Chat Window (Absolute) -->
         <div id="chat-window">
             <div class="chat-header">
-                <strong>AI 教練</strong>
+                <strong>AI教練</strong>
                 <div class="chat-header-actions">
+                    <button type="button" class="icon-button" id="chat-privacy" aria-label="資料使用說明" title="資料使用說明"><i data-lucide="info"></i></button>
                     <button type="button" class="icon-button" id="chat-clear" aria-label="清除對話" title="清除對話"><i data-lucide="rotate-ccw"></i></button>
                     <button type="button" class="icon-button" id="chat-close" aria-label="關閉聊天室" title="關閉聊天室"><i data-lucide="x"></i></button>
                 </div>
             </div>
             <div id="chat-messages">
-                <div class="chat-msg ai">嗨！可以先查看個人週報或當日運動分析。AI 建議僅供參考；提問會將運動摘要與最近對話傳送至 Google。</div>
+                <div class="chat-msg ai" data-speaker="AI教練">嗨，我是你的AI教練！今天想聊聊運動，還是看看最近的紀錄？</div>
             </div>
             <div class="chat-shortcuts" aria-label="快捷訊息">
                 <button type="button" data-report="week">個人週報</button>
@@ -438,6 +454,12 @@
                 <button id="chat-send" onclick="sendChatMessage()" aria-label="傳送訊息" title="傳送訊息"><i data-lucide="send"></i></button>
             </div>
         </div>
+
+        <dialog id="coach-privacy-dialog" class="workout-dialog coach-privacy-dialog" aria-labelledby="coach-privacy-title">
+            <div class="dialog-heading"><h2 id="coach-privacy-title">AI教練資料使用說明</h2><button type="button" class="icon-button" id="coach-privacy-close" aria-label="關閉說明" title="關閉說明"><i data-lucide="x"></i></button></div>
+            <p>使用AI教練時，運動摘要與最近對話會傳送至 Google 處理，不會另外附上帳號的姓名、Email、LINE ID 或密碼。請勿在訊息中提供敏感或機密資訊。</p>
+            <p>熱量為估計值，建議屬於一般運動參考，不能代替醫療診斷。</p>
+        </dialog>
 
         <dialog id="workout-dialog" class="workout-dialog" aria-labelledby="workout-dialog-title">
             <form id="edit-workout-form">

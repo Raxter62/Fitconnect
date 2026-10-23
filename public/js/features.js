@@ -5,6 +5,62 @@ let workoutRows = [];
 let historyRequest = 0;
 let editingWorkout = null;
 let workoutSaving = false;
+let activeDashboardPage = 'home';
+let coachEnabled = true;
+const workoutMobile = matchMedia('(max-width: 768px)');
+let workoutPageSize = workoutMobile.matches ? 10 : 20;
+
+function fcHistoryVisible() {
+    return !!currentUser && activeDashboardPage === 'history';
+}
+
+function fcUpdateCoachVisibility() {
+    const visible = !!currentUser && activeDashboardPage === 'home' && coachEnabled;
+    document.getElementById('ai-coach-container').classList.toggle('hidden', !visible);
+    document.getElementById('nav-coach-toggle').textContent = `AI教練: ${coachEnabled ? 'ON' : 'OFF'}`;
+    document.getElementById('nav-coach-toggle').classList.toggle('hidden', activeDashboardPage !== 'home');
+    if (!visible) document.getElementById('chat-window').style.display = 'none';
+    if (window.fcChatViewport) fcChatViewport();
+}
+
+function fcShowDashboardPage(scroll = true) {
+    if (!currentUser) return;
+    const hash = location.hash;
+    const previousPage = activeDashboardPage;
+    activeDashboardPage = ['#workouts', '#section-history'].includes(hash) ? 'history' : 'home';
+    const historyVisible = activeDashboardPage === 'history';
+    document.getElementById('home-view').classList.toggle('hidden', historyVisible);
+    document.getElementById('history-view').classList.toggle('hidden', !historyVisible);
+    document.title = historyVisible ? '運動紀錄 | FitConnect' : 'FitConnect 運動平台';
+    document.querySelectorAll('.nav-links [data-dashboard-link]').forEach(link => {
+        const selected = historyVisible ? link.hash === '#workouts' : link.hash === (hash || '#section-hero');
+        link.classList.toggle('active', selected);
+        if (selected) link.setAttribute('aria-current', 'page');
+        else link.removeAttribute('aria-current');
+    });
+    fcUpdateCoachVisibility();
+    if (historyVisible) {
+        fcLoadWorkouts(workoutPage);
+    } else if (previousPage !== activeDashboardPage) {
+        historyRequest++;
+        setGlobalRange(globalTimeRange);
+        if (globalTimeRange === 'total') fetchStats(statsTimeRange);
+    }
+    if (scroll) requestAnimationFrame(() => {
+        if (historyVisible) window.scrollTo({ top: 0, behavior: 'instant' });
+        else {
+            const section = document.getElementById(hash.slice(1));
+            const target = section && document.getElementById('home-view').contains(section) ? section : document.getElementById('section-hero');
+            target.scrollIntoView({ block: 'start', behavior: 'instant' });
+        }
+        window.dispatchEvent(new Event('resize'));
+    });
+}
+
+function fcWorkoutsChanged() {
+    workoutPage = 1;
+    if (fcHistoryVisible()) fcLoadWorkouts(1);
+}
 
 function fcIcons(root = document) {
     if (window.lucide) window.lucide.createIcons({ root });
@@ -31,12 +87,26 @@ function fcAccountView(view, email = '') {
     fcAuthMessage('');
 }
 
+function fcReadAccountLink() {
+    const link = new URLSearchParams(location.hash.slice(1));
+    const view = link.get('auth');
+    if (!['verify', 'reset'].includes(view)) return false;
+    const token = link.get('token') || '';
+    if (currentUser) fcExpireSession();
+    else showLogin();
+    accountLinkToken = token;
+    history.replaceState(null, '', location.pathname + location.search);
+    fcAccountView(view);
+    if (!/^[a-f0-9]{64}$/.test(token)) fcAuthMessage('連結不完整，請重新申請。');
+    return true;
+}
+
 function fcSetupFeatures() {
     fcIcons();
     const coach = document.querySelector('.coach-img-wrapper');
     coach.tabIndex = 0;
     coach.setAttribute('role', 'button');
-    coach.setAttribute('aria-label', '開啟 AI 教練聊天室');
+    coach.setAttribute('aria-label', '開啟AI教練聊天室');
     coach.addEventListener('keydown', event => {
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
@@ -81,16 +151,22 @@ function fcSetupFeatures() {
             }
         });
     });
-    const link = new URLSearchParams(location.hash.slice(1));
-    if (['verify', 'reset'].includes(link.get('auth'))) {
-        accountLinkToken = link.get('token') || '';
-        history.replaceState(null, '', location.pathname + location.search);
-        fcAccountView(link.get('auth'));
-        if (!/^[a-f0-9]{64}$/.test(accountLinkToken)) fcAuthMessage('連結不完整，請重新申請。');
-    }
+    fcReadAccountLink();
     document.getElementById('history-prev').addEventListener('click', () => fcLoadWorkouts(workoutPage - 1));
     document.getElementById('history-next').addEventListener('click', () => fcLoadWorkouts(workoutPage + 1));
     document.getElementById('history-refresh').addEventListener('click', () => fcLoadWorkouts(workoutPage));
+    window.addEventListener('hashchange', () => {
+        if (!fcReadAccountLink()) fcShowDashboardPage();
+    });
+    document.querySelectorAll('[data-dashboard-link]').forEach(link => link.addEventListener('click', () => {
+        if (location.hash === link.hash) fcShowDashboardPage();
+    }));
+    workoutMobile.addEventListener('change', () => {
+        const firstRecord = (workoutPage - 1) * workoutPageSize;
+        workoutPageSize = workoutMobile.matches ? 10 : 20;
+        workoutPage = Math.floor(firstRecord / workoutPageSize) + 1;
+        if (fcHistoryVisible()) fcLoadWorkouts(workoutPage);
+    });
     document.getElementById('edit-close').addEventListener('click', () => {
         if (!workoutSaving) document.getElementById('workout-dialog').close();
     });
@@ -112,22 +188,36 @@ async function fcGet(action, params = {}) {
 }
 
 async function fcLoadWorkouts(page = 1) {
+    if (!fcHistoryVisible()) return;
     const request = ++historyRequest;
     const owner = currentUser?.id;
     const status = document.getElementById('history-status');
     const body = document.getElementById('workout-history-body');
+    const empty = document.getElementById('history-empty');
+    const table = document.querySelector('.history-table-wrap');
+    const prev = document.getElementById('history-prev');
+    const next = document.getElementById('history-next');
     if (!owner || isDemoMode) {
         body.replaceChildren();
         status.textContent = '目前沒有可顯示的運動紀錄。';
+        empty.classList.remove('hidden');
+        table.classList.add('hidden');
+        prev.disabled = next.disabled = true;
         return;
     }
     status.textContent = '正在載入紀錄…';
+    empty.classList.add('hidden');
+    prev.disabled = next.disabled = true;
+    document.getElementById('history-refresh').disabled = true;
+    table.setAttribute('aria-busy', 'true');
     try {
-        const json = await fcGet('list_workouts', { page: Math.max(1, Math.min(workoutPages, page)) });
+        const json = await fcGet('list_workouts', { page: Math.max(1, page), per_page: workoutPageSize });
         if (request !== historyRequest || owner !== currentUser?.id) return;
         workoutPage = json.page;
         workoutPages = json.pages;
         workoutRows = json.data;
+        table.classList.toggle('hidden', !json.total);
+        empty.classList.toggle('hidden', !!json.total);
         body.replaceChildren();
         for (const row of workoutRows) {
             const tr = document.createElement('tr');
@@ -159,12 +249,19 @@ async function fcLoadWorkouts(page = 1) {
             body.appendChild(tr);
         }
         fcIcons();
-        status.textContent = json.total ? `共 ${json.total} 筆紀錄` : '還沒有運動紀錄，新增後會顯示在這裡。';
+        status.textContent = json.total ? `共 ${json.total} 筆紀錄` : '共 0 筆紀錄';
         document.getElementById('history-page').textContent = `${workoutPage} / ${workoutPages}`;
         document.getElementById('history-prev').disabled = workoutPage <= 1;
         document.getElementById('history-next').disabled = workoutPage >= workoutPages;
     } catch (error) {
         if (request === historyRequest && owner === currentUser?.id) status.textContent = `載入失敗：${error.message}`;
+    } finally {
+        if (request === historyRequest && owner === currentUser?.id) {
+            table.setAttribute('aria-busy', 'false');
+            document.getElementById('history-refresh').disabled = false;
+            prev.disabled = workoutPage <= 1;
+            next.disabled = workoutPage >= workoutPages;
+        }
     }
 }
 
@@ -172,8 +269,13 @@ function fcResetFeatures() {
     historyRequest++;
     workoutRows = [];
     workoutPage = workoutPages = 1;
+    activeDashboardPage = 'home';
+    coachEnabled = true;
+    if (['#workouts', '#section-history'].includes(location.hash)) history.replaceState(null, '', '#section-hero');
+    document.title = 'FitConnect 運動平台';
     document.getElementById('workout-history-body').replaceChildren();
     document.getElementById('workout-dialog').close();
+    document.getElementById('coach-privacy-dialog').close();
     if (window.fcResetChat) window.fcResetChat();
 }
 
@@ -203,9 +305,11 @@ function fcEditWorkout(row) {
 
 async function fcAfterWorkoutChange(achievements = []) {
     achievements.forEach(achievement => showAchievementNotification(achievement.title, achievement.img));
-    setGlobalRange(globalTimeRange);
-    if (globalTimeRange === 'total') fetchStats(statsTimeRange);
-    await fcLoadWorkouts(workoutPage);
+    if (fcHistoryVisible()) await fcLoadWorkouts(workoutPage);
+    else {
+        setGlobalRange(globalTimeRange);
+        if (globalTimeRange === 'total') fetchStats(statsTimeRange);
+    }
     if (window.fcInvalidateReport) window.fcInvalidateReport();
 }
 

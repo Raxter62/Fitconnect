@@ -20,8 +20,11 @@ $clean = fc_coach_history($history);
 expect(count($clean) <= 6 && mb_strlen($clean[0]['parts'][0]['text']) <= 1200, 'Bound history');
 $reply = ['candidates' => [['finishReason' => 'STOP', 'content' => ['parts' => [['text' => json_encode(['advice' => ['依照身體感受調整強度。'], 'question' => ''])]]]]]];
 expect(strpos(fc_parse_gemini_reply($reply), '調整強度') !== false, 'Parse Gemini structured response');
+expect(fc_parse_gemini_reply($reply) === '依照身體感受調整強度。', 'A single suggestion stays conversational');
+$reply['candidates'][0]['content']['parts'][0]['text'] = json_encode(['advice' => [FC_COACH_UNAVAILABLE], 'question' => '']);
+expect(fc_parse_gemini_reply($reply) === FC_COACH_UNAVAILABLE, 'Refusal has no extra prefix or suffix');
 $reply['candidates'][0]['content']['parts'][0]['text'] = json_encode(['advice' => ['你運動了999分鐘'], 'question' => '']);
-try { fc_parse_gemini_reply($reply); throw new LogicException('Fabricated number was accepted'); } catch (RuntimeException $e) {}
+try { fc_parse_gemini_reply($reply); throw new LogicException('Fabricated number was accepted'); } catch (RuntimeException $e) { expect($e->getMessage() === FC_COACH_UNAVAILABLE, 'Rejected facts have a generic public error'); }
 $reply['candidates'][0]['finishReason'] = 'MAX_TOKENS';
 try { fc_parse_gemini_reply($reply); throw new LogicException('Truncated response was accepted'); } catch (RuntimeException $e) {}
 echo "Date boundaries, calorie calculation, password limits, bounded history and Gemini response guards passed.\n";

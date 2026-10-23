@@ -201,7 +201,7 @@ function showDashboard() {
     }
 
     setGlobalRange('1d');
-    fcLoadWorkouts(1);
+    fcShowDashboardPage();
 
     // Start Auto Refresh (Profile, Stats, Leaderboard)
     startAutoRefresh();
@@ -526,7 +526,7 @@ async function handleAddWorkout(e) {
             setupDateTimeDefaults();
             setGlobalRange(globalTimeRange);
             if (globalTimeRange === 'total') fetchStats(statsTimeRange);
-            fcLoadWorkouts(1);
+            fcWorkoutsChanged();
             fcInvalidateReport();
         } else {
             alert('新增失敗: ' + (json.message || ''));
@@ -1083,6 +1083,11 @@ async function postJson(action, data = {}) {
 
     const text = await res.text();
 
+    if (res.status === 401 && currentUser) {
+        fcExpireSession();
+        return { success: false, message: '登入已失效，請重新登入。' };
+    }
+
     try {
         const json = JSON.parse(text);
         return json;
@@ -1137,7 +1142,7 @@ async function setupCoachInteraction() {
     const coachContainer = document.getElementById('ai-coach-container');
 
     if (chatWindow) chatWindow.style.display = 'none';
-    if (coachContainer) coachContainer.classList.remove('hidden');
+    if (coachContainer) coachContainer.classList.add('hidden');
 }
 
 function setupMobileNav() {
@@ -1585,27 +1590,8 @@ console.log('✅ main.js 載入完成');
 function toggleAICoach(e) {
     if (e) e.preventDefault();
 
-    const coachContainer = document.getElementById('ai-coach-container');
-    const toggleBtn = document.getElementById('nav-coach-toggle');
-    const chatWindow = document.getElementById('chat-window');
-
-    if (!coachContainer || !toggleBtn) return;
-
-    if (coachContainer.style.display === 'none') {
-        // Show
-        coachContainer.style.display = 'block';
-        toggleBtn.textContent = 'AI教練: ON';
-        // Restore chat window visibility logic if needed, but for now just toggle coach
-    } else {
-        // Hide
-        coachContainer.style.display = 'none';
-        toggleBtn.textContent = 'AI教練: OFF';
-        // Also hide chat window if coach is hidden? 
-        // User asked "Show/Hide AI Coach", implied the avatar. 
-        // If chat is open, maybe keep it? Or hide it too? 
-        // Let's hide chat too to be safe, as it is related.
-        if (chatWindow) chatWindow.style.display = 'none';
-    }
+    coachEnabled = !coachEnabled;
+    fcUpdateCoachVisibility();
 
     // Auto-close menu on mobile (matches other links)
     const navLinks = document.querySelector('.nav-links');
@@ -1641,6 +1627,8 @@ function startAutoRefresh() {
                 return;
             }
         } catch (e) { console.error('Auto-refresh User Error', e); }
+
+        if (fcHistoryVisible()) return;
 
         // 2. Refresh Stats (Charts)
         // Use globalTimeRange

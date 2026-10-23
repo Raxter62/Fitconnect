@@ -9,16 +9,19 @@ const root = path.resolve(__dirname, '..');
 const localRequire = createRequire(path.join(root, '.test-runtime/package.json'));
 const { PGlite } = localRequire('@electric-sql/pglite');
 const { PGLiteSocketServer } = localRequire('@electric-sql/pglite-socket');
-const php = process.env.PHP_BIN || 'C:/Users/User/.codex/visualizations/2026/08/09/019fe683-12e6-72f2-97b1-8800f404dc56/php-cli/php/php.exe';
-const phpArgs = process.env.PHP_BIN ? [] : ['-d', `extension_dir=${path.join(path.dirname(php), 'ext')}`, '-d', 'extension=php_mbstring.dll', '-d', 'extension=php_curl.dll', '-d', 'extension=php_pdo_pgsql.dll'];
+const php = process.env.PHP_BIN || 'php';
+const phpArgs = [];
 let web, server, db, browser;
 let nativeDir;
 let serverLog = '';
 let passed = 0;
 const check = (name, fn) => { fn(); passed++; console.log(`PASS ${name}`); };
 const sha = value => createHash('sha256').update(value).digest('hex');
-const base = 'http://127.0.0.1:8094';
-const env = { ...process.env, DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:55439/postgres?sslmode=disable', APP_BASE_URL: base, APP_ENV: 'local', GEMINI_API_KEY: '', RESEND_API_KEY: '' };
+const httpPort = Number(process.env.FC_TEST_HTTP_PORT || 8094);
+const pgPort = Number(process.env.FC_TEST_PG_PORT || 55439);
+assert.ok([httpPort, pgPort].every(port => Number.isInteger(port) && port > 0 && port < 65536));
+const base = `http://127.0.0.1:${httpPort}`;
+const env = { ...process.env, DATABASE_URL: `postgresql://postgres:postgres@127.0.0.1:${pgPort}/postgres?sslmode=disable`, APP_BASE_URL: base, APP_ENV: 'local', GEMINI_API_KEY: '', RESEND_API_KEY: '' };
 
 function httpRequest(url, options = {}) {
     return new Promise((resolve, reject) => {
@@ -93,7 +96,12 @@ async function run() {
             child.on('exit', code => code === 0 ? resolve(output) : reject(new Error(output)));
         });
         await command('initdb', ['-D', nativeDir, '-U', 'postgres', '-A', 'trust', '--encoding=UTF8', '--locale=C']);
-        await command('pg_ctl', ['-D', nativeDir, '-l', nativeDir + '/server.log', '-o', '-h 127.0.0.1 -p 55439', '-w', 'start']);
+        try {
+            await command('pg_ctl', ['-D', nativeDir, '-l', nativeDir + '/server.log', '-o', `-h 127.0.0.1 -p ${pgPort}`, '-w', 'start']);
+        } catch (error) {
+            const log = await fs.readFile(nativeDir + '/server.log', 'utf8').catch(() => 'No PostgreSQL log available.');
+            throw new Error(error.message + '\n' + log);
+        }
         server = { stop: () => command('pg_ctl', ['-D', nativeDir, '-m', 'fast', '-w', 'stop']) };
         const { Client } = localRequire('pg');
         const pg = new Client({ connectionString: env.DATABASE_URL });
@@ -102,17 +110,35 @@ async function run() {
         console.log('Using native PostgreSQL.');
     } else {
         db = await PGlite.create();
-        server = new PGLiteSocketServer({ db, port: 55439, host: '127.0.0.1', maxConnections: 8 });
+        server = new PGLiteSocketServer({ db, port: pgPort, host: '127.0.0.1', maxConnections: 8 });
         await server.start();
     }
+    const schema = await fs.readFile(path.join(root, 'db/schema.sql'), 'utf8');
+    await db.exec('CREATE SCHEMA fresh_install; SET search_path TO fresh_install;');
+    await db.exec(schema);
+    const baseline = await db.query("SELECT column_name FROM information_schema.columns WHERE table_schema='fresh_install' AND table_name='workouts'");
+    check('standalone schema includes new workout columns', () => assert.ok(['revision', 'request_key', 'weight_kg'].every(name => baseline.rows.some(row => row.column_name === name))));
+    check('standalone schema includes request deduplication index', () => {});
+    assert.equal(Number((await db.query("SELECT COUNT(*) FROM pg_indexes WHERE schemaname='fresh_install' AND indexname='idx_workouts_request_key'")).rows[0].count), 1);
+    await db.exec(`SET search_path TO public;
+        CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+            display_name TEXT, avatar_id INTEGER NOT NULL DEFAULT 1, line_user_id TEXT UNIQUE,
+            line_bind_code VARCHAR(10), line_bind_code_expires_at TIMESTAMPTZ, height NUMERIC(5,1), weight NUMERIC(5,1), created_at TIMESTAMPTZ DEFAULT NOW());
+        CREATE TABLE workouts (id BIGSERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            date TIMESTAMPTZ NOT NULL, type TEXT NOT NULL, minutes INTEGER NOT NULL, calories INTEGER NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW());
+        INSERT INTO users (email,password_hash) VALUES ('legacy@example.test','fixture');
+        INSERT INTO workouts (user_id,date,type,minutes,calories) SELECT id,NOW(),'跑步',10,100 FROM users;`);
     const migration = await phpRun(['db/migrate.php']);
     check('fresh migration', () => assert.match(migration, /Applied/));
     check('migration is idempotent', () => {});
     assert.doesNotMatch(await phpRun(['db/migrate.php']), /Applied/);
+    const legacy = await db.query("SELECT t.total_calories FROM user_totals t JOIN users u ON u.id=t.user_id WHERE u.email='legacy@example.test'");
+    check('legacy upgrade preserves workouts and backfills totals', () => assert.equal(Number(legacy.rows[0].total_calories), 100));
+    await db.exec("DELETE FROM users WHERE email='legacy@example.test';");
     const aId = await seed('athlete-a@example.test');
     await seed('athlete-b@example.test');
     const pendingId = await seed('pending@example.test', false);
-    web = spawn(php, [...phpArgs, '-S', '127.0.0.1:8094', '-t', root], { cwd: root, env, windowsHide: true });
+    web = spawn(php, [...phpArgs, '-S', `127.0.0.1:${httpPort}`, '-t', root], { cwd: root, env, windowsHide: true });
     web.stderr.on('data', data => serverLog = (serverLog + data).slice(-12000));
     web.on('error', error => serverLog += error.message);
     let ready = false;
@@ -204,7 +230,20 @@ async function run() {
     check('moving a date revokes broken streak achievement', () => assert.equal(Number(streak.rows[0].count), 0));
     for (const row of streakRows) assert.equal((await a.request('delete_workout', row)).json.success, true);
     result = await a.request('ai_coach', { message: '運動建議' });
-    check('missing Gemini key gives safe error', () => { assert.equal(result.json.success, false); assert.doesNotMatch(result.json.message, /SQL|stack|api\.openai/); });
+    check('missing Gemini key gives only the public fallback', () => { assert.equal(result.status, 502); assert.equal(result.json.message, '這個問題我沒辦法回答喔'); });
+    const paginationId = await seed('pagination@example.test');
+    await db.query("INSERT INTO workouts(user_id,date,type,minutes,calories) SELECT $1,NOW() - n * INTERVAL '1 minute','瑜珈',5,16 FROM generate_series(1,25) n", [paginationId]);
+    const pagination = client();
+    await pagination.request('login', { email: 'pagination@example.test', password: 'FitconnectTest123!' });
+    let paged = (await pagination.request('list_workouts', {}, 'GET')).json;
+    check('desktop pagination uses 20 rows', () => { assert.equal(paged.data.length, 20); assert.equal(paged.pages, 2); });
+    paged = (await pagination.request('list_workouts', { per_page: 10, page: 3 }, 'GET')).json;
+    check('mobile pagination uses 10 rows and a correct last page', () => { assert.equal(paged.data.length, 5); assert.equal(paged.pages, 3); assert.equal(paged.page, 3); });
+    result = await pagination.request('list_workouts', { per_page: 500 }, 'GET');
+    check('pagination rejects an unbounded page size', () => assert.equal(result.status, 400));
+    result = await pagination.request('get_report', { period: 'day' }, 'GET');
+    check('report omits repeated metadata but keeps estimated calories', () => { assert.doesNotMatch(result.json.report.text, /台北時間|資料來源/); assert.match(result.json.report.text, /估計消耗/); });
+    await db.query('DELETE FROM users WHERE id=$1', [paginationId]);
     result = await guest.request('register', { email: 'new@example.test', password: 'FitconnectTest123!', display_name: '新用戶' });
     check('registration awaits verification and reports mail failure', () => { assert.equal(result.json.verification_required, true); assert.equal(result.json.email_sent, false); });
     const known = await guest.request('forgot_password', { email: 'athlete-a@example.test' });
@@ -250,11 +289,14 @@ async function uiTests() {
     await fs.mkdir(path.join(root, 'test-results'), { recursive: true });
     const fixtureHash = await phpRun(['-r', "echo password_hash('PreviewFit123!', PASSWORD_DEFAULT);"]);
     await db.query('UPDATE users SET password_hash=$1 WHERE email=$2', [fixtureHash, 'athlete-b@example.test']);
+    const uiUserId = (await db.query("SELECT id FROM users WHERE email='athlete-b@example.test'")).rows[0].id;
     for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844], ['small-mobile', 320, 640]]) {
         const context = await browser.newContext({ viewport: { width, height }, isMobile: width < 500, deviceScaleFactor: 1 });
         const page = await context.newPage();
         const errors = [];
+        const historyRequests = [];
         page.on('pageerror', error => errors.push(error.message));
+        page.on('request', request => { if (request.url().includes('action=list_workouts')) historyRequests.push(request.url()); });
         await page.goto(base, { waitUntil: 'networkidle' });
         await page.waitForTimeout(350);
         await page.screenshot({ path: path.join(root, `test-results/${name}-login.png`) });
@@ -267,39 +309,113 @@ async function uiTests() {
         await page.waitForSelector('#dashboard-view:not(.hidden)');
         await page.waitForTimeout(500);
         await page.evaluate(() => { currentUser.weight = 60; currentUser.height = 170; });
+        check(`${name} home has no history section or history request`, () => assert.equal(historyRequests.length, 0));
+        assert.equal(await page.locator('#section-history').isVisible(), false);
         const session = await context.cookies();
         const api = client(); api.cookie = session.map(c => `${c.name}=${c.value}`).join('; ');
         api.csrf = (await api.request('get_user_info', {}, 'GET')).json.csrf_token;
+        await db.query("INSERT INTO workouts(user_id,date,type,minutes,calories,weight_kg) SELECT $1,NOW() - (n+2) * INTERVAL '1 minute','其他',5,16,60 FROM generate_series(1,22) n", [uiUserId]);
         const date = new Date(Date.now() - 120000).toLocaleString('sv-SE', { timeZone: 'Asia/Taipei', hour12: false });
         await api.request('add_workout', { date, type: '瑜珈', minutes: 30 });
-        await page.evaluate(() => document.getElementById('section-history').scrollIntoView({ block: 'start', behavior: 'instant' }));
-        await page.screenshot({ path: path.join(root, `test-results/${name}-before-history.png`) });
-        await page.click('#history-refresh');
+        await page.screenshot({ path: path.join(root, `test-results/${name}-home.png`) });
+        await page.evaluate(() => setGlobalRange('total'));
+        if (width <= 768) await page.click('.nav-toggle');
+        await page.click('.nav-links [href="#workouts"]');
         await page.waitForSelector('#workout-history-body tr');
         await page.waitForFunction(() => document.getElementById('history-status').textContent.startsWith('共 '));
-        await page.locator('#section-history').scrollIntoViewIfNeeded();
+        check(`${name} history is a separate page with responsive pagination`, () => {});
+        assert.equal(await page.locator('#home-view').isVisible(), false);
+        assert.equal(await page.locator('#section-leaderboard').isVisible(), false);
+        assert.equal(await page.locator('#ai-coach-container').isVisible(), false);
+        assert.equal(await page.locator('#workout-history-body tr').count(), width <= 768 ? 10 : 20);
+        const titleBounds = await page.locator('#history-title').boundingBox();
+        check(`${name} history title is centered`, () => assert.ok(Math.abs(titleBounds.x + titleBounds.width / 2 - width / 2) < 2));
+        const waveMoving = await page.locator('#history-wave').evaluate(el => el.closest('svg').querySelector('use').getAnimations().length > 0);
+        check(`${name} history retains animated waves`, () => assert.ok(waveMoving));
+        await page.waitForFunction(() => innerWidth > 768 || document.querySelector('.nav-links').getBoundingClientRect().left >= innerWidth - 1);
         await page.screenshot({ path: path.join(root, `test-results/${name}-history.png`) });
-        await page.evaluate(() => setGlobalRange('total'));
+        if (width > 768) {
+            await page.click('#history-next');
+            await page.waitForFunction(() => document.getElementById('history-page').textContent === '2 / 2' && !document.getElementById('history-refresh').disabled);
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.waitForFunction(() => document.getElementById('history-page').textContent === '3 / 3' && !document.getElementById('history-refresh').disabled);
+            check('resize preserves first record and switches to 10-row pagination', () => {});
+            assert.equal(await page.locator('#workout-history-body tr').count(), 3);
+            await page.setViewportSize({ width, height });
+            await page.waitForFunction(() => document.getElementById('history-page').textContent === '2 / 2' && !document.getElementById('history-refresh').disabled);
+            await page.click('#history-prev');
+            await page.waitForFunction(() => document.getElementById('history-page').textContent === '1 / 2' && !document.getElementById('history-refresh').disabled);
+        }
         await page.locator('#workout-history-body .icon-button').first().click();
         const dialog = await page.locator('#workout-dialog').boundingBox();
         check(`${name} editor stays inside viewport`, () => assert.ok(dialog.x >= 0 && dialog.y >= 0 && dialog.x + dialog.width <= width + 1 && dialog.y + dialog.height <= height + 1));
         await page.screenshot({ path: path.join(root, `test-results/${name}-edit.png`) });
         await page.fill('#edit-minutes', '35');
-        const statsRefreshed = page.waitForResponse(response => response.url().includes('action=get_stats') && response.status() === 200);
         await page.click('#edit-workout-form [type=submit]');
-        const updatedStats = await (await statsRefreshed).json();
         await page.waitForFunction(() => !document.getElementById('workout-dialog').open && document.getElementById('history-status').textContent.startsWith('共 '));
-        check(`${name} saved edit refreshes charts in total ranking mode`, () => assert.equal(updatedStats.success, true));
-        await page.evaluate(() => toggleChat());
+        const statsRefreshed = page.waitForResponse(response => response.url().includes('action=get_stats') && response.status() === 200);
+        await page.click('#history-view [aria-label="返回首頁"]');
+        const updatedStats = await (await statsRefreshed).json();
+        check(`${name} returning home refreshes charts in total ranking mode`, () => assert.equal(updatedStats.success, true));
+        await page.goBack();
+        await page.waitForSelector('#history-view:not(.hidden)');
+        await page.goForward();
+        await page.waitForSelector('#home-view:not(.hidden)');
+        check(`${name} browser back and forward switch pages`, () => {});
+        const portrait = await page.locator('.coach-full-img').boundingBox();
+        check(`${name} full portrait is visible, not a round thumbnail`, () => assert.ok(portrait.width >= 180 && portrait.y >= 0 && portrait.y + portrait.height <= height + 1));
+        await page.locator('.coach-img-wrapper').click();
         await page.click('.chat-shortcuts [data-report=week]');
         await page.waitForSelector('.report-interpret');
+        const facts = await page.locator('.report-facts').innerText();
+        check(`${name} reports omit internal notices and timezone labels`, () => assert.doesNotMatch(facts, /資料來源|台北時間|Google/));
+        await page.fill('#chat-input', '今天適合做些什麼運動？');
+        await page.click('#chat-send');
+        await page.waitForFunction(() => !coachBusy);
+        check(`${name} real missing-key error has only the generic refusal`, () => {});
+        assert.equal(await page.locator('.chat-msg.ai').last().innerText(), '這個問題我沒辦法回答喔');
+        let failReply = false;
+        await page.route('**/submit.php?action=ai_coach', route => route.fulfill({
+            status: failReply ? 429 : 200, contentType: 'application/json',
+            body: JSON.stringify(failReply ? { success: false, message: 'Gemini quota API key data check DO_NOT_SHOW' } : {
+                success: true, response: '看得出你正在努力養成習慣，今天可以依身體感受放慢一點，讓運動舒服地持續下去。',
+                report: { text: '個人週報 SHOULD_NOT_REPEAT', period: 'week' }
+            })
+        }));
+        await page.click('.report-interpret');
+        await page.waitForFunction(() => !coachBusy);
+        check(`${name} conversation stays warm without inserting another report`, () => {});
+        assert.equal(await page.locator('.report-facts').count(), 1);
+        assert.match(await page.locator('.chat-msg.ai').last().innerText(), /舒服地持續/);
+        assert.doesNotMatch(await page.locator('#chat-messages').innerText(), /SHOULD_NOT_REPEAT|AI 建議/);
+        assert.equal(await page.locator('.chat-msg.ai:not([data-speaker="AI教練"])').count(), 0);
+        failReply = true;
+        await page.fill('#chat-input', '還有其他建議嗎？');
+        await page.click('#chat-send');
+        await page.waitForFunction(() => !coachBusy);
+        assert.equal(await page.locator('.chat-msg.ai').last().innerText(), '這個問題我沒辦法回答喔');
+        check(`${name} UI never shows provider diagnostics`, () => {});
+        assert.doesNotMatch(await page.locator('#chat-messages').innerText(), /Gemini|quota|DO_NOT_SHOW/);
         await page.screenshot({ path: path.join(root, `test-results/${name}-chat.png`) });
         const geometry = await page.evaluate(() => {
             const chat = document.getElementById('chat-window').getBoundingClientRect();
-            return { scroll: document.documentElement.scrollWidth, width: innerWidth, chat: { x: chat.x, y: chat.y, right: chat.right, bottom: chat.bottom }, height: innerHeight };
+            const portrait = document.querySelector('.coach-full-img').getBoundingClientRect();
+            return { scroll: document.documentElement.scrollWidth, width: innerWidth, chat: { x: chat.x, y: chat.y, right: chat.right, bottom: chat.bottom }, portrait: { x: portrait.x, y: portrait.y, right: portrait.right, bottom: portrait.bottom }, height: innerHeight };
         });
         check(`${name} has no horizontal overflow`, () => assert.ok(geometry.scroll <= geometry.width + 1));
         check(`${name} chat stays inside viewport`, () => assert.ok(geometry.chat.x >= 0 && geometry.chat.y >= 0 && geometry.chat.right <= geometry.width + 1 && geometry.chat.bottom <= geometry.height + 1));
+        check(`${name} chat does not cover the portrait`, () => assert.ok(geometry.chat.bottom <= geometry.portrait.y || geometry.chat.right <= geometry.portrait.x));
+        await page.click('#chat-privacy');
+        await page.waitForSelector('#coach-privacy-dialog[open]');
+        await page.click('#coach-privacy-close');
+        if (width > 768) {
+            await page.setViewportSize({ width, height: 500 });
+            await page.waitForTimeout(100);
+            const beside = await page.evaluate(() => ({ chat: document.getElementById('chat-window').getBoundingClientRect().right, portrait: document.querySelector('.coach-full-img').getBoundingClientRect().left }));
+            check('short desktop places chat beside the portrait', () => assert.ok(beside.chat <= beside.portrait));
+            await page.screenshot({ path: path.join(root, 'test-results/desktop-short-chat.png') });
+            await page.setViewportSize({ width, height });
+        }
         check(`${name} has no JavaScript errors`, () => assert.deepEqual(errors, []));
         const cachedApis = await page.evaluate(async () => {
             await navigator.serviceWorker.ready;
@@ -315,12 +431,53 @@ async function uiTests() {
         check(`${name} offline API cannot return stale private data`, () => assert.equal(offlineApi, false));
         await context.setOffline(false);
         await page.click('#chat-close');
-        await page.evaluate(() => document.getElementById('section-history').scrollIntoView({ block: 'start', behavior: 'instant' }));
-        page.once('dialog', dialog => dialog.accept());
-        await page.locator('#workout-history-body [title="刪除紀錄"]').first().click();
-        await page.waitForFunction(() => document.getElementById('history-status').textContent.startsWith('還沒有'));
+        await page.evaluate(() => toggleAICoach());
+        if (width <= 768) await page.click('.nav-toggle');
+        await page.click('.nav-links [href="#workouts"]');
+        await page.waitForFunction(() => !document.getElementById('history-refresh').disabled);
+        await page.reload({ waitUntil: 'networkidle' });
+        await page.waitForTimeout(350);
+        await page.fill('#login-email', 'athlete-b@example.test');
+        await page.fill('#login-password', 'PreviewFit123!');
+        await page.click('#login-form [type=submit]');
+        await page.waitForSelector('#history-view:not(.hidden)');
+        await page.waitForFunction(() => !document.getElementById('history-refresh').disabled);
+        check(`${name} history deep link survives refresh and login`, () => {});
+        while (await page.locator('#history-next').isEnabled()) {
+            await page.click('#history-next');
+            await page.waitForFunction(() => !document.getElementById('history-refresh').disabled);
+        }
+        const lastPage = await page.locator('#history-page').innerText();
+        for (let i = 0; i < 3; i++) {
+            page.once('dialog', dialog => dialog.accept());
+            const deleted = page.waitForResponse(response => response.url().includes('action=delete_workout'));
+            await page.locator('#workout-history-body [title="刪除紀錄"]').first().click();
+            await deleted;
+            await page.waitForFunction(total => document.getElementById('history-status').textContent === `共 ${total} 筆紀錄` && !document.getElementById('history-refresh').disabled, 22 - i);
+        }
+        const afterPage = await page.locator('#history-page').innerText();
+        check(`${name} deleting the last page retreats to a valid page`, () => assert.notEqual(afterPage, lastPage));
+        await db.query('DELETE FROM workouts WHERE user_id=$1', [uiUserId]);
+        await db.query('UPDATE user_totals SET total_calories=0 WHERE user_id=$1', [uiUserId]);
+        await page.click('#history-refresh');
+        await page.waitForSelector('#history-empty:not(.hidden)');
         const remainingRows = await page.locator('#workout-history-body tr').count();
-        check(`${name} deletion updates history`, () => assert.equal(remainingRows, 0));
+        check(`${name} empty history has no stale rows`, () => assert.equal(remainingRows, 0));
+        if (width <= 768) {
+            await page.click('#history-view [aria-label="返回首頁"]');
+            await page.click('.nav-toggle');
+            await page.screenshot({ path: path.join(root, `test-results/${name}-menu.png`) });
+            await page.click('#nav-coach-toggle');
+            if (width <= 768) await page.click('.nav-toggle');
+            await page.click('.nav-links [href="#workouts"]');
+            await page.click('#history-view [aria-label="返回首頁"]');
+            check(`${name} navigation retains the coach visibility preference`, () => {});
+            assert.equal(await page.locator('#ai-coach-container').isVisible(), false);
+        }
+        await page.goto(base + '/#auth=verify&token=' + 'a'.repeat(64), { waitUntil: 'networkidle' });
+        await page.waitForSelector('#verify-form:not(.hidden)');
+        check(`${name} workout routing does not break email token links`, () => assert.equal(new URL(page.url()).hash, ''));
+        check(`${name} all navigation completes without JavaScript errors`, () => assert.deepEqual(errors, []));
         await context.close();
     }
 }

@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     display_name TEXT,
     avatar_id INTEGER NOT NULL DEFAULT 1,
+    email_verified_at TIMESTAMPTZ,
+    auth_version INTEGER NOT NULL DEFAULT 1,
 
     line_user_id TEXT UNIQUE,
     line_bind_code VARCHAR(10),
@@ -30,6 +32,9 @@ CREATE TABLE IF NOT EXISTS workouts (
     type TEXT NOT NULL,
     minutes INTEGER NOT NULL,
     calories INTEGER NOT NULL,
+    weight_kg NUMERIC(5,1),
+    revision INTEGER NOT NULL DEFAULT 1,
+    request_key VARCHAR(64),
 
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -84,8 +89,42 @@ CREATE TABLE IF NOT EXISTS achievements (
 );
 
 -- =============================================
--- Indexes
+-- Account verification and migration metadata
 -- =============================================
+
+-- Existing databases must still apply db/migrate.php; CREATE TABLE does not add columns.
+CREATE TABLE IF NOT EXISTS account_tokens (
+    token_hash CHAR(64) PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose VARCHAR(20) NOT NULL CHECK (purpose IN ('verify', 'reset')),
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS account_rate_limits (
+    key_hash CHAR(64) PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    window_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_account_tokens_user ON account_tokens(user_id, purpose, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower_unique ON users(LOWER(email));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_line_user_id_unique ON users(line_user_id) WHERE line_user_id IS NOT NULL;
+
+-- The upgrade runner also reads this file before upgrading older workouts tables.
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'workouts' AND column_name = 'request_key') THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workouts_request_key ON workouts(user_id, request_key) WHERE request_key IS NOT NULL;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_users_line_bind_code ON users(line_bind_code);
 

@@ -227,18 +227,24 @@ try {
         }
         if ($action === 'list_workouts') {
             $page = max(1, (int)($_GET['page'] ?? 1));
+            $pageSize = filter_var($_GET['per_page'] ?? 20, FILTER_VALIDATE_INT);
+            if (!in_array($pageSize, [10, 20], true)) {
+                http_response_code(400);
+                sendResponse(['success' => false, 'message' => '不支援的每頁筆數。']);
+            }
             $count = $pdo->prepare('SELECT COUNT(*) FROM workouts WHERE user_id = ?');
             $count->execute([$userId]);
             $total = (int)$count->fetchColumn();
-            $page = min($page, max(1, (int)ceil($total / 20)));
+            $page = min($page, max(1, (int)ceil($total / $pageSize)));
             $stmt = $pdo->prepare("SELECT id, to_char(date AT TIME ZONE 'Asia/Taipei', 'YYYY-MM-DD HH24:MI:SS') AS date,
                 type, minutes, calories, weight_kg, revision FROM workouts WHERE user_id = :uid
-                ORDER BY date DESC, id DESC LIMIT 20 OFFSET :offset");
+                ORDER BY date DESC, id DESC LIMIT :limit OFFSET :offset");
             $stmt->bindValue(':uid', $userId, PDO::PARAM_INT);
-            $stmt->bindValue(':offset', ($page - 1) * 20, PDO::PARAM_INT);
+            $stmt->bindValue(':limit', $pageSize, PDO::PARAM_INT);
+            $stmt->bindValue(':offset', ($page - 1) * $pageSize, PDO::PARAM_INT);
             $stmt->execute();
             sendResponse(['success' => true, 'data' => $stmt->fetchAll(), 'page' => $page,
-                'total' => $total, 'pages' => max(1, (int)ceil($total / 20))]);
+                'total' => $total, 'per_page' => $pageSize, 'pages' => max(1, (int)ceil($total / $pageSize))]);
         }
         session_write_close();
         $result = fc_mutate_workout($pdo, $userId, $action === 'update_workout' ? 'update' : 'delete', $input);
@@ -584,7 +590,8 @@ try {
     }
     if ($action === 'ai_coach') {
         if (!$coachAvailable) {
-            sendResponse(['success' => false, 'message' => 'AI Coach not available']);
+            http_response_code(503);
+            sendResponse(['success' => false, 'message' => '這個問題我沒辦法回答喔']);
         }
         
         if (!isset($_SESSION['user_id'])) {
@@ -620,11 +627,10 @@ try {
             $history[] = ['role' => 'model', 'text' => $result['response']];
             if ((int)($_SESSION['coach_epoch'] ?? 0) === $epoch) $_SESSION['coach_history'] = array_slice($history, -6);
             sendResponse(['success' => true] + $result);
-        } catch (PDOException $e) {
-            throw $e;
-        } catch (RuntimeException $e) {
-            http_response_code(502);
-            sendResponse(['success' => false, 'message' => $e->getMessage()]);
+        } catch (Throwable $e) {
+            error_log('AI coach request failed: ' . get_class($e));
+            http_response_code($e instanceof PDOException ? 503 : 502);
+            sendResponse(['success' => false, 'message' => FC_COACH_UNAVAILABLE]);
         }
     }
     
