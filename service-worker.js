@@ -3,7 +3,7 @@
 
 // 每次更新前端資源（main.js / css / html）都要更新版本號，讓瀏覽器抓新檔。
 // 這不會改變任何功能，只是讓瀏覽器知道要更新快取。
-const CACHE_VERSION = 'v10-2026-10-23-coach-history-pages';
+const CACHE_VERSION = 'v11-2026-10-23-coach-alignment-smooth-nav';
 const CACHE_NAME = `fitconnect-${CACHE_VERSION}`;
 
 const ASSETS_TO_CACHE = [

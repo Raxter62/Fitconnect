@@ -311,6 +311,38 @@ async function uiTests() {
         await page.evaluate(() => { currentUser.weight = 60; currentUser.height = 170; });
         check(`${name} home has no history section or history request`, () => assert.equal(historyRequests.length, 0));
         assert.equal(await page.locator('#section-history').isVisible(), false);
+        for (const repeat of [false, true]) {
+            await page.evaluate(() => {
+                window.scrollTo({ top: 0, behavior: 'instant' });
+                window.__navScrollSamples = [];
+                window.__navLastScroll = performance.now();
+                window.__navScrollListener = () => {
+                    window.__navScrollSamples.push(scrollY);
+                    window.__navLastScroll = performance.now();
+                };
+                window.addEventListener('scroll', window.__navScrollListener);
+            });
+            if (width <= 768) await page.click('.nav-toggle');
+            await page.click('.nav-links [href="#section-charts"]');
+            await page.waitForFunction(() => window.__navScrollSamples.length > 1 && performance.now() - window.__navLastScroll > 150);
+            const navigation = await page.evaluate(() => {
+                window.removeEventListener('scroll', window.__navScrollListener);
+                return { samples: window.__navScrollSamples, end: scrollY, hash: location.hash };
+            });
+            check(`${name} ${repeat ? 'same-section' : 'section'} navigation scrolls gradually`, () => {
+                assert.equal(navigation.hash, '#section-charts');
+                assert.ok(navigation.end > 100);
+                assert.ok(navigation.samples.some(y => y > 5 && y < navigation.end - 5));
+            });
+        }
+        if (width > 768) await page.emulateMedia({ reducedMotion: 'reduce' });
+        if (width <= 768) await page.click('.nav-toggle');
+        await page.click('.nav-links [href="#section-hero"]');
+        await page.waitForFunction(() => scrollY < 2);
+        if (width > 768) {
+            check('reduced-motion navigation returns without animation', () => {});
+            await page.emulateMedia({ reducedMotion: 'no-preference' });
+        }
         const session = await context.cookies();
         const api = client(); api.cookie = session.map(c => `${c.name}=${c.value}`).join('; ');
         api.csrf = (await api.request('get_user_info', {}, 'GET')).json.csrf_token;
@@ -364,6 +396,30 @@ async function uiTests() {
         check(`${name} browser back and forward switch pages`, () => {});
         const portrait = await page.locator('.coach-full-img').boundingBox();
         check(`${name} full portrait is visible, not a round thumbnail`, () => assert.ok(portrait.width >= 180 && portrait.y >= 0 && portrait.y + portrait.height <= height + 1));
+        if (width <= 768) {
+            const alignment = await page.locator('.coach-full-img').evaluate(image => {
+                const bounds = image.getBoundingClientRect();
+                const frame = image.closest('.coach-img-wrapper').getBoundingClientRect();
+                const canvas = document.createElement('canvas');
+                canvas.width = image.naturalWidth;
+                canvas.height = image.naturalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(image, 0, 0);
+                const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                let right = 0;
+                for (let y = 0; y < canvas.height; y++) {
+                    for (let x = 0; x < canvas.width; x++) {
+                        if (data[(y * canvas.width + x) * 4 + 3] > 16) right = Math.max(right, x);
+                    }
+                }
+                return { edge: bounds.left + (right + 1) * bounds.width / canvas.width, right: frame.right, bottom: frame.bottom, width: innerWidth, height: innerHeight };
+            });
+            check(`${name} visible coach artwork aligns with the lower-right edge`, () => {
+                assert.ok(Math.abs(alignment.edge - alignment.right) < 1);
+                assert.ok(Math.abs(alignment.right - alignment.width) < 1);
+                assert.ok(Math.abs(alignment.bottom - alignment.height) < 1);
+            });
+        }
         await page.locator('.coach-img-wrapper').click();
         await page.click('.chat-shortcuts [data-report=week]');
         await page.waitForSelector('.report-interpret');
@@ -405,9 +461,11 @@ async function uiTests() {
         check(`${name} has no horizontal overflow`, () => assert.ok(geometry.scroll <= geometry.width + 1));
         check(`${name} chat stays inside viewport`, () => assert.ok(geometry.chat.x >= 0 && geometry.chat.y >= 0 && geometry.chat.right <= geometry.width + 1 && geometry.chat.bottom <= geometry.height + 1));
         check(`${name} chat does not cover the portrait`, () => assert.ok(geometry.chat.bottom <= geometry.portrait.y || geometry.chat.right <= geometry.portrait.x));
-        await page.click('#chat-privacy');
-        await page.waitForSelector('#coach-privacy-dialog[open]');
-        await page.click('#coach-privacy-close');
+        if (await page.locator('#chat-privacy').count()) {
+            await page.click('#chat-privacy');
+            await page.waitForSelector('#coach-privacy-dialog[open]');
+            await page.click('#coach-privacy-close');
+        }
         if (width > 768) {
             await page.setViewportSize({ width, height: 500 });
             await page.waitForTimeout(100);

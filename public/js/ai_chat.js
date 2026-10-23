@@ -117,8 +117,8 @@ document.getElementById('chat-close').addEventListener('click', () => {
     document.getElementById('chat-window').style.display = 'none';
     document.body.classList.remove('coach-chat-compact');
 });
-document.getElementById('chat-privacy').addEventListener('click', () => document.getElementById('coach-privacy-dialog').showModal());
-document.getElementById('coach-privacy-close').addEventListener('click', () => document.getElementById('coach-privacy-dialog').close());
+document.getElementById('chat-privacy')?.addEventListener('click', () => document.getElementById('coach-privacy-dialog')?.showModal());
+document.getElementById('coach-privacy-close')?.addEventListener('click', () => document.getElementById('coach-privacy-dialog')?.close());
 document.getElementById('chat-clear').addEventListener('click', async () => {
     if (coachBusy) return;
     fcChatBusy(true);

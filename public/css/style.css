@@ -1973,14 +1973,14 @@ button:disabled {
 
     #ai-coach-container {
         transform: none !important;
-        right: 8px;
-        bottom: max(0px, env(safe-area-inset-bottom));
+        right: max(0px, env(safe-area-inset-right));
+        bottom: 0;
     }
 
     .coach-img-wrapper {
         width: min(240px, 60vw);
         height: auto;
-        overflow: visible;
+        overflow: hidden;
         border: 0;
         border-radius: 0;
         background: transparent;
@@ -1990,6 +1990,8 @@ button:disabled {
     .coach-full-img {
         width: 100%;
         height: auto;
+        /* Both 511px-wide portraits have a 35px transparent right gutter. */
+        transform: translateX(6.85%);
     }
 
     .coach-bubble {

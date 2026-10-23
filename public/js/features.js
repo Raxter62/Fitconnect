@@ -51,7 +51,8 @@ function fcShowDashboardPage(scroll = true) {
         else {
             const section = document.getElementById(hash.slice(1));
             const target = section && document.getElementById('home-view').contains(section) ? section : document.getElementById('section-hero');
-            target.scrollIntoView({ block: 'start', behavior: 'instant' });
+            const behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth';
+            target.scrollIntoView({ block: 'start', behavior });
         }
         window.dispatchEvent(new Event('resize'));
     });
@@ -158,8 +159,12 @@ function fcSetupFeatures() {
     window.addEventListener('hashchange', () => {
         if (!fcReadAccountLink()) fcShowDashboardPage();
     });
-    document.querySelectorAll('[data-dashboard-link]').forEach(link => link.addEventListener('click', () => {
-        if (location.hash === link.hash) fcShowDashboardPage();
+    document.querySelectorAll('[data-dashboard-link]').forEach(link => link.addEventListener('click', event => {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        // Let the router reveal hidden sections before starting a single smooth scroll.
+        if (location.hash !== link.hash) history.pushState(null, '', link.hash);
+        fcShowDashboardPage();
     }));
     workoutMobile.addEventListener('change', () => {
         const firstRecord = (workoutPage - 1) * workoutPageSize;
@@ -275,7 +280,7 @@ function fcResetFeatures() {
     document.title = 'FitConnect 運動平台';
     document.getElementById('workout-history-body').replaceChildren();
     document.getElementById('workout-dialog').close();
-    document.getElementById('coach-privacy-dialog').close();
+    document.getElementById('coach-privacy-dialog')?.close();
     if (window.fcResetChat) window.fcResetChat();
 }
 
